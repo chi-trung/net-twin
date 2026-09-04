@@ -8,6 +8,18 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
+  build: {
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          cytoscape: ['cytoscape', 'cytoscape-fcose'],
+          echarts: ['echarts', 'echarts-for-react'],
+          vendor: ['react', 'react-dom', '@tanstack/react-query', 'axios'],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

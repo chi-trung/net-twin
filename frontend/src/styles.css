@@ -214,3 +214,138 @@ body {
 .error {
   color: var(--down);
 }
+
+/* ── topology graph ──────────────────────────────────── */
+.panel-graph {
+  display: flex;
+  flex-direction: column;
+}
+
+.topology-canvas {
+  flex: 1;
+  min-height: 420px;
+  background: radial-gradient(ellipse at center, #0e1730 0%, var(--bg-panel) 70%);
+  border-radius: 8px;
+}
+
+/* ── device detail panel ─────────────────────────────── */
+.detail-panel h3 {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+
+.detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.close-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.close-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.sysdesc {
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-radius: 6px;
+  padding: 8px;
+  word-break: break-word;
+}
+
+.detail-panel h4 {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+
+.iface-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.iface-table th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.iface-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid rgba(34, 48, 82, 0.5);
+}
+
+.iface-table .mac {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── alert feed ──────────────────────────────────────── */
+.alert-feed {
+  margin-top: 18px;
+}
+
+.alert-count {
+  color: var(--down);
+  font-size: 11px;
+  text-transform: none;
+}
+
+.alert-feed ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.alert {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  border-left: 3px solid var(--unknown);
+  font-size: 12px;
+}
+
+.alert-critical {
+  border-left-color: var(--down);
+}
+
+.alert-warning {
+  border-left-color: var(--degraded);
+}
+
+.alert-info {
+  border-left-color: var(--accent);
+}
+
+.alert-rule {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.alert-time {
+  color: var(--text-dim);
+  font-size: 11px;
+}
