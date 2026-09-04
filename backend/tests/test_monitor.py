@@ -49,6 +49,38 @@ async def test_null_probe_always_up():
     assert r == ProbeResult(reachable=True, latency_ms=2.5, packet_loss_pct=0.0)
 
 
+async def test_null_probe_reports_simulated_outage_down():
+    from app.core.outages import get_outages
+
+    get_outages().add("10.99.99.99")
+    try:
+        r = await NullProbe().probe("10.99.99.99")
+        assert r.reachable is False
+        assert r.packet_loss_pct == 100.0
+        # other devices are unaffected
+        ok = await NullProbe().probe("10.0.0.1")
+        assert ok.reachable is True
+    finally:
+        get_outages().remove("10.99.99.99")
+
+
+async def test_sim_outage_endpoints_roundtrip(client):
+    r = await client.post("/api/v1/sim/outages", json={"ip_address": "10.0.4.18"})
+    assert r.status_code == 200
+    assert "10.0.4.18" in r.json()["outages"]
+
+    r = await client.get("/api/v1/sim/outages")
+    assert "10.0.4.18" in r.json()["outages"]
+
+    r = await client.delete("/api/v1/sim/outages/10.0.4.18")
+    assert r.status_code == 200
+    assert "10.0.4.18" not in r.json()["outages"]
+
+    # clearing twice → 404
+    r = await client.delete("/api/v1/sim/outages/10.0.4.18")
+    assert r.status_code == 404
+
+
 # ── metric store ───────────────────────────────────────────────────
 
 def test_metric_rate_first_observation_returns_none():

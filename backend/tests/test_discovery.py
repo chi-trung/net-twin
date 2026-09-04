@@ -119,6 +119,22 @@ def test_simulate_topology_is_deterministic_and_connected():
         assert link.source_ip in ips and link.target_ip in ips
 
 
+async def test_simulator_source_hides_outaged_devices():
+    from app.core.outages import get_outages
+    from app.discovery.simulator import SimulatorSource
+
+    full = await SimulatorSource(seed=7).discover()
+    victim = full.devices[-1].ip_address
+    get_outages().add(victim)
+    try:
+        hidden = await SimulatorSource(seed=7).discover()
+        assert len(hidden.devices) == len(full.devices) - 1
+        assert all(d.ip_address != victim for d in hidden.devices)
+        assert all(victim not in (lnk.source_ip, lnk.target_ip) for lnk in hidden.links)
+    finally:
+        get_outages().remove(victim)
+
+
 # ── builder integration (async, in-memory sqlite) ─────────────────
 
 async def test_build_twin_creates_then_updates(db_session):

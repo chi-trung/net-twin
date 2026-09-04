@@ -1,10 +1,12 @@
 """REST API routes: health, topology, devices, metrics, alerts."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.outages import get_outages
 from app.db.models import Alert, Device, Link, MetricSample
 from app.db.session import get_session
 
@@ -120,3 +122,28 @@ async def trigger_monitor() -> dict:
         raise HTTPException(status_code=503, detail="scheduler not running")
     await scheduler.run_monitor_cycle()
     return {"status": "ok"}
+
+# ── demo / chaos controls (simulator mode) ─────────────────────────
+
+class OutageIn(BaseModel):
+    ip_address: str
+
+@router.get("/sim/outages", tags=["simulation"])
+async def list_outages() -> dict:
+    """IPs currently hidden by the simulated-outage registry."""
+    return {"outages": get_outages().list()}
+
+@router.post("/sim/outages", tags=["simulation"])
+async def create_outage(body: OutageIn) -> dict:
+    """Simulate a device failure: the next discovery/monitor cycles will mark
+    it DOWN, emit device.health_changed and raise a node_down alert."""
+    get_outages().add(body.ip_address)
+    return {"outages": get_outages().list()}
+
+@router.delete("/sim/outages/{ip_address}", tags=["simulation"])
+async def clear_outage(ip_address: str) -> dict:
+    """Heal a simulated failure; the twin recovers on its own next cycles."""
+    cleared = get_outages().remove(ip_address)
+    if not cleared:
+        raise HTTPException(status_code=404, detail=f"no outage for {ip_address}")
+    return {"outages": get_outages().list()}
