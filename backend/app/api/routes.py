@@ -8,7 +8,15 @@ from sqlalchemy.orm import selectinload
 from app.db.models import Alert, Device, Link, MetricSample
 from app.db.session import get_session
 
-from .schemas import AlertOut, DeviceDetail, DeviceOut, LinkOut, MetricPoint, MetricSeriesOut, TopologyOut
+from .schemas import (
+    AlertOut,
+    DeviceDetail,
+    DeviceOut,
+    LinkOut,
+    MetricPoint,
+    MetricSeriesOut,
+    TopologyOut,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -85,3 +93,30 @@ async def list_alerts(
     if status:
         stmt = stmt.where(Alert.status == status)
     return [AlertOut.model_validate(a) for a in (await db.scalars(stmt)).all()]
+
+
+@router.post("/discovery/run", tags=["system"])
+async def trigger_discovery(db: AsyncSession = Depends(get_session)) -> dict:
+    """Run one discovery cycle immediately (the scheduler also runs it on a timer)."""
+    from app.discovery.engine import run_discovery
+
+    report = await run_discovery(db)
+    return {
+        "devices_created": report.devices_created,
+        "devices_updated": report.devices_updated,
+        "devices_staled": report.devices_staled,
+        "links_created": report.links_created,
+        "changed": report.changed,
+    }
+
+
+@router.post("/monitor/run", tags=["system"])
+async def trigger_monitor() -> dict:
+    """Run one monitoring cycle immediately using the live scheduler."""
+    from app.monitor.scheduler import get_scheduler
+
+    scheduler = get_scheduler()
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="scheduler not running")
+    await scheduler.run_monitor_cycle()
+    return {"status": "ok"}

@@ -14,13 +14,28 @@ from app.core.logging import configure_logging
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
-    # Development convenience: ensure tables exist. Production schema is
-    # managed by Alembic migrations.
-    if settings.app_env == "development":
-        from app.db.session import init_models
+    scheduler = None
+    try:
+        # Development convenience: ensure tables exist. Production schema is
+        # managed by Alembic migrations.
+        if settings.app_env == "development":
+            from app.db.session import init_models
 
-        await init_models()
+            await init_models()
+        from app.monitor.scheduler import start_scheduler
+
+        scheduler = start_scheduler(settings)
+    except Exception:  # noqa: BLE001 — serve REST even if the twin loop can't start
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "scheduler unavailable (database down?); API will serve without live updates"
+        )
     yield
+    if scheduler is not None:
+        from app.monitor.scheduler import stop_scheduler
+
+        await stop_scheduler()
 
 
 def create_app() -> FastAPI:
@@ -38,6 +53,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
+
+    from app.events.websocket import router as ws_router
+
+    app.include_router(ws_router)
     return app
 
 
