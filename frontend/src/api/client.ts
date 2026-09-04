@@ -1,7 +1,7 @@
 /** Typed HTTP client for the net-twin REST API. */
 
 import axios from 'axios';
-import type { Alert, DeviceDetail, MetricSeries, Topology } from '../types';
+import type { Alert, DeviceDetail, MetricSeries, Overview, PathResult, Topology, WhatIfResult } from '../types';
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -22,4 +22,14 @@ export const api = {
     http.get<Alert[]>('/alerts', { params: status ? { status } : {} }).then((r) => r.data),
   runDiscovery: () => http.post('/discovery/run').then((r) => r.data),
   runMonitor: () => http.post('/monitor/run').then((r) => r.data),
+  whatIf: (deviceId: number) =>
+    http.post<WhatIfResult>(`/analysis/whatif/${deviceId}`).then((r) => r.data),
+  tracePath: (fromId: number, toId: number) =>
+    http
+      .get<PathResult>('/topology/path', { params: { from: fromId, to: toId } })
+      .then((r) => r.data),
+  overview: () => http.get<Overview>('/overview').then((r) => r.data),
+  simulateOutage: (ip: string) =>
+    http.post('/sim/outages', { ip_address: ip }).then((r) => r.data),
+  clearOutage: (ip: string) => http.delete(`/sim/outages/${ip}`).then((r) => r.data),
 };

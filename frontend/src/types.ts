@@ -98,3 +98,34 @@ export type TwinEvent =
   | { type: 'alert.cleared'; alert_id: number; device_id: number; rule: string }
   | { type: 'metrics.flushed'; devices: number; timestamp: string }
   | { type: string; [key: string]: unknown };
+
+// ── twin intelligence ──────────────────────────────────────────────
+
+export interface WhatIfResult {
+  failed_device: Device;
+  isolated: Device[];
+  degraded: Device[];
+  affected_links: Link[];
+  impacted_count: number;
+}
+
+export interface PathResult {
+  found: boolean;
+  hops: number;
+  device_ids: number[];
+  devices: Device[];
+  link_ids: number[];
+}
+
+export interface Overview {
+  total_devices: number;
+  up: number;
+  down: number;
+  degraded: number;
+  unknown: number;
+  total_links: number;
+  active_alerts: number;
+  critical_alerts: number;
+  avg_latency_ms: number | null;
+  healthiest_updated_at: string | null;
+}
