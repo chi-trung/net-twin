@@ -76,9 +76,12 @@ Because a production network is not always available, net-twin supports three da
 ## 6. Roadmap (phases)
 
 - [x] Phase 1 — Repo scaffolding & docs
-- [ ] Phase 2 — Backend core (FastAPI, config, DB models, migrations)
-- [ ] Phase 3 — Discovery engine (scan, SNMP, topology builder)
-- [ ] Phase 4 — Monitoring engine (pollers, metrics, alerts, WebSocket)
-- [ ] Phase 5 — Frontend scaffold (React + Vite + TS)
-- [ ] Phase 6 — Topology UI (Cytoscape live graph + dashboard)
-- [ ] Phase 7 — Docker Compose + operations docs
+- [x] Phase 2 — Backend core (FastAPI, config, DB models, migrations)
+- [x] Phase 3 — Discovery engine (scan, SNMP, topology builder)
+- [x] Phase 4 — Monitoring engine (pollers, metrics, alerts, WebSocket)
+- [x] Phase 5 — Frontend scaffold (React + Vite + TS)
+- [x] Phase 6 — Topology UI (Cytoscape live graph + dashboard)
+- [x] Phase 7 — Docker Compose + operations docs
+
+Next (stretch goals): what-if simulation on the twin graph, NetFlow collection,
+PDF report export, TimescaleDB retention policies.

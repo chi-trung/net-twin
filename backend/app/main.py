@@ -16,12 +16,11 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.log_level)
     scheduler = None
     try:
-        # Development convenience: ensure tables exist. Production schema is
-        # managed by Alembic migrations.
-        if settings.app_env == "development":
-            from app.db.session import init_models
+        # Idempotent create_all keeps single-node deployments (compose, demo)
+        # zero-touch. Alembic owns the schema once migrations are introduced.
+        from app.db.session import init_models
 
-            await init_models()
+        await init_models()
         from app.monitor.scheduler import start_scheduler
 
         scheduler = start_scheduler(settings)
