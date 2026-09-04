@@ -11,6 +11,7 @@ import { DeviceTable } from './components/DeviceTable';
 import { TopologyGraph } from './components/TopologyGraph';
 import { DeviceDetailPanel } from './components/DeviceDetailPanel';
 import { AlertFeed } from './components/AlertFeed';
+import { OverviewBar } from './components/OverviewBar';
 
 const STATUS_LABEL: Record<string, string> = {
   connecting: 'connecting…',
@@ -44,6 +45,7 @@ export default function App() {
       </header>
       <main className="layout">
         <section className="panel panel-graph">
+          <OverviewBar />
           <h2>Topology</h2>
           <TopologyGraph onSelectDevice={setSelectedDevice} />
         </section>
