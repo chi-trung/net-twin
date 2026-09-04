@@ -1,13 +1,14 @@
-"""REST API routes: health, topology, devices, metrics, alerts."""
+"""REST API routes: health, topology, devices, metrics, alerts, analysis."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.analysis.graph import blast_radius, build_adjacency, shortest_path
 from app.core.outages import get_outages
-from app.db.models import Alert, Device, Link, MetricSample
+from app.db.models import Alert, AlertStatus, Device, DeviceType, HealthState, Link, MetricSample
 from app.db.session import get_session
 
 from .schemas import (
@@ -17,7 +18,10 @@ from .schemas import (
     LinkOut,
     MetricPoint,
     MetricSeriesOut,
+    OverviewOut,
+    PathOut,
     TopologyOut,
+    WhatIfOut,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -147,3 +151,117 @@ async def clear_outage(ip_address: str) -> dict:
     if not cleared:
         raise HTTPException(status_code=404, detail=f"no outage for {ip_address}")
     return {"outages": get_outages().list()}
+
+
+# ── twin intelligence ──────────────────────────────────────────────
+
+async def _load_graph(db: AsyncSession) -> tuple[dict[int, Device], list[tuple[int, int]]]:
+    """Fetch devices + edges and build plain adjacency for the analysis engine."""
+    devices = {d.id: d for d in (await db.scalars(select(Device))).all()}
+    edges = [
+        (lnk.source_device_id, lnk.target_device_id)
+        for lnk in (await db.scalars(select(Link))).all()
+    ]
+    adjacency = build_adjacency(list(devices), edges)
+    return devices, adjacency
+
+
+def _root_id(devices: dict[int, Device]) -> int | None:
+    """The twin root is the first router found (core of the campus model)."""
+    for d in devices.values():
+        if d.device_type == DeviceType.ROUTER:
+            return d.id
+    return None
+
+
+@router.post("/analysis/whatif/{device_id}", response_model=WhatIfOut, tags=["analysis"])
+async def whatif_failure(device_id: int, db: AsyncSession = Depends(get_session)) -> WhatIfOut:
+    """What-if analysis: simulate losing one device and report the impact
+    (isolated, degraded devices) computed on the current twin graph."""
+    devices, adjacency = await _load_graph(db)
+    device = devices.get(device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail=f"device {device_id} not found")
+
+    radius = blast_radius(adjacency, failed_id=device_id, root_id=_root_id(devices))
+    affected_link_ids = {frozenset(pair) for pair in radius.affected_links}
+    affected = [
+        lnk
+        for lnk in (await db.scalars(select(Link))).all()
+        if frozenset((lnk.source_device_id, lnk.target_device_id)) in affected_link_ids
+    ]
+    return WhatIfOut(
+        failed_device=DeviceOut.model_validate(device),
+        isolated=[DeviceOut.model_validate(devices[i]) for i in radius.isolated_ids],
+        degraded=[DeviceOut.model_validate(devices[i]) for i in radius.degraded_ids],
+        affected_links=[LinkOut.model_validate(lnk) for lnk in affected],
+        impacted_count=radius.impacted_count,
+    )
+
+
+@router.get("/topology/path", response_model=PathOut, tags=["analysis"])
+async def trace_path(
+    from_id: int = Query(alias="from"),
+    to_id: int = Query(alias="to"),
+    db: AsyncSession = Depends(get_session),
+) -> PathOut:
+    """Shortest path between two devices on the twin graph."""
+    devices, adjacency = await _load_graph(db)
+    for dev_id in (from_id, to_id):
+        if dev_id not in devices:
+            raise HTTPException(status_code=404, detail=f"device {dev_id} not found")
+
+    path_ids = shortest_path(adjacency, from_id, to_id) or []
+    links = {
+        frozenset((lnk.source_device_id, lnk.target_device_id)): lnk
+        for lnk in (await db.scalars(select(Link))).all()
+    }
+    link_ids: list[int] = []
+    for a, b in zip(path_ids, path_ids[1:], strict=False):
+        lnk = links.get(frozenset((a, b)))
+        if lnk is not None:
+            link_ids.append(lnk.id)
+    return PathOut(
+        found=bool(path_ids),
+        hops=max(len(path_ids) - 1, 0),
+        device_ids=path_ids,
+        devices=[DeviceOut.model_validate(devices[i]) for i in path_ids],
+        link_ids=link_ids,
+    )
+
+
+@router.get("/overview", response_model=OverviewOut, tags=["analysis"])
+async def overview(db: AsyncSession = Depends(get_session)) -> OverviewOut:
+    """Fleet KPIs for the dashboard header: health counts, alerts, latency."""
+    devices = (await db.scalars(select(Device))).all()
+    by_health = {h: 0 for h in HealthState}
+    for d in devices:
+        by_health[d.health] += 1
+
+    alerts = (await db.scalars(select(Alert).where(Alert.status == AlertStatus.ACTIVE))).all()
+    # avg latency over the most recent samples (portable across PG/SQLite)
+    vals = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(MetricSample.value)
+                .where(MetricSample.metric_name == "latency_ms")
+                .order_by(MetricSample.timestamp.desc())
+                .limit(200)
+            )
+        ).all()
+    ]
+    avg_latency = sum(vals) / len(vals) if vals else None
+
+    return OverviewOut(
+        total_devices=len(devices),
+        up=by_health[HealthState.UP],
+        down=by_health[HealthState.DOWN],
+        degraded=by_health[HealthState.DEGRADED],
+        unknown=by_health[HealthState.UNKNOWN],
+        total_links=(await db.scalar(select(func.count(Link.id))) or 0),
+        active_alerts=len(alerts),
+        critical_alerts=sum(1 for a in alerts if a.severity.value == "critical"),
+        avg_latency_ms=avg_latency,
+        healthiest_updated_at=max((d.updated_at for d in devices), default=None),
+    )

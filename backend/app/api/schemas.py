@@ -53,6 +53,34 @@ class TopologyOut(BaseModel):
     nodes: list[DeviceOut]
     edges: list[LinkOut]
 
+# ── twin intelligence ──────────────────────────────────────────────
+
+class WhatIfOut(BaseModel):
+    failed_device: DeviceOut
+    isolated: list[DeviceOut]  # cut off from the root after the failure
+    degraded: list[DeviceOut]  # reachable but lost a direct link
+    affected_links: list[LinkOut]
+    impacted_count: int
+
+class PathOut(BaseModel):
+    found: bool
+    hops: int
+    device_ids: list[int]
+    devices: list[DeviceOut]
+    link_ids: list[int]
+
+class OverviewOut(BaseModel):
+    total_devices: int
+    up: int
+    down: int
+    degraded: int
+    unknown: int
+    total_links: int
+    active_alerts: int
+    critical_alerts: int
+    avg_latency_ms: float | None
+    healthiest_updated_at: datetime | None = None
+
 
 class MetricPoint(BaseModel):
     timestamp: datetime
