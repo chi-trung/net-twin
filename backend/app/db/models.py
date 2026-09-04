@@ -9,6 +9,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     DateTime,
     Enum,
@@ -16,7 +17,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -124,7 +124,11 @@ class MetricSample(Base):
         Index("ix_metric_name_ts", "metric_name", "timestamp"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # BigInteger gives 64-bit ids on Postgres; SQLite only auto-increments INTEGER,
+    # so tests/dev fall back to a plain Integer via the variant.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True
+    )
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
     interface_id: Mapped[int | None] = mapped_column(
         ForeignKey("interfaces.id", ondelete="CASCADE")
