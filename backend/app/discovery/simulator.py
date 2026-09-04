@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 
+from app.core.outages import get_outages
 from app.db.models import DeviceType
 
 from .models import DiscoveredDevice, DiscoveredInterface, DiscoveredLink, DiscoveryResult
@@ -100,10 +101,25 @@ def simulate_topology(seed: int | None = None) -> DiscoveryResult:
 
 
 class SimulatorSource:
-    """Discovery-source interface-compatible wrapper around simulate_topology."""
+    """Discovery-source interface-compatible wrapper around simulate_topology.
+
+    Devices with an active simulated outage are hidden from the result, so the
+    builder's stale-detection path marks them DOWN exactly like a real device
+    that stopped answering the sweep.
+    """
 
     def __init__(self, seed: int | None = None) -> None:
         self._seed = seed
 
     async def discover(self) -> DiscoveryResult:
-        return simulate_topology(self._seed)
+        result = simulate_topology(self._seed)
+        outages = get_outages()
+        if outages.list():
+            down = outages.list()
+            result.devices = [d for d in result.devices if d.ip_address not in down]
+            result.links = [
+                lnk
+                for lnk in result.links
+                if lnk.source_ip not in down and lnk.target_ip not in down
+            ]
+        return result

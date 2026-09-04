@@ -5,8 +5,8 @@ implementations:
 
 - SystemPingProbe: shells out to the OS `ping` command. Works unprivileged on
   Windows and Linux, which matters because raw ICMP sockets need admin/root.
-- NullProbe: always reports "up, 0 ms" — used by the simulator source so the
-  demo never depends on real reachability.
+- NullProbe: reports "up, 0 ms" for the simulator source so the demo never
+  depends on real reachability; devices with a simulated outage report down.
 
 Parsing is isolated in pure functions so it is unit-testable.
 """
@@ -18,6 +18,8 @@ import platform
 import re
 from dataclasses import dataclass
 from typing import Protocol
+
+from app.core.outages import get_outages
 
 _LATENCY_RE = re.compile(r"time[=<]\s*(\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)
 _LOSS_RE = re.compile(r"(\d{1,3})%\s*loss", re.IGNORECASE)
@@ -87,10 +89,13 @@ class SystemPingProbe:
 
 
 class NullProbe:
-    """Always-up probe for simulator mode."""
+    """Simulator-mode probe: always up, except for devices with an active
+    simulated outage (see app.core.outages), which report unreachable."""
 
     def __init__(self, latency_ms: float = 1.0) -> None:
         self.latency_ms = latency_ms
 
     async def probe(self, ip: str, count: int = 4) -> ProbeResult:  # noqa: ARG002
+        if get_outages().is_down(ip):
+            return ProbeResult(reachable=False, latency_ms=None, packet_loss_pct=100.0)
         return ProbeResult(reachable=True, latency_ms=self.latency_ms, packet_loss_pct=0.0)
