@@ -154,6 +154,55 @@ async def test_in_memory_bus_fanout():
     assert (await q2.get())["n"] == 2
 
 
+async def test_redis_bus_fans_out_to_all_subscribers():
+    """A single pub/sub iterator must fan out to every subscriber queue."""
+    import asyncio as _a
+
+    from app.events.bus import RedisBus
+
+    class FakePubSub:
+        def __init__(self, client):
+            self._client = client
+
+        async def subscribe(self, topic):
+            return None
+
+        async def unsubscribe(self, topic):
+            return None
+
+        async def listen(self):
+            while True:
+                msg = await self._client.next_message()
+                if msg is None:
+                    return
+                yield msg
+
+    class FakeRedis:
+        def __init__(self):
+            self._inbox: _a.Queue = _a.Queue()
+
+        def pubsub(self):
+            return FakePubSub(self)
+
+        async def publish(self, topic, data):
+            await self._inbox.put({"type": "message", "channel": topic, "data": data})
+
+        async def next_message(self):
+            return await self._inbox.get()
+
+    client = FakeRedis()
+    bus = RedisBus(client)
+    await bus.start()
+    try:
+        q1, q2 = bus.subscribe(), bus.subscribe()
+        await bus.publish({"type": "node.down", "device_id": 7})
+        # both queues get the same decoded event
+        assert (await _a.wait_for(q1.get(), 1))["device_id"] == 7
+        assert (await _a.wait_for(q2.get(), 1))["device_id"] == 7
+    finally:
+        await bus.stop()
+
+
 # ── WebSocket endpoint ─────────────────────────────────────────────
 
 

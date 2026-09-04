@@ -50,34 +50,55 @@ class InMemoryBus:
 
 
 class RedisBus:
-    """Cross-process bus via Redis pub/sub. publish() is fire-and-forget."""
+    """Cross-process bus via Redis pub/sub. publish() is fire-and-forget.
+
+    A single dispatcher task reads the shared pub/sub iterator and fans each
+    message out to every subscriber queue — one iterator per consumer would
+    split the stream instead of duplicating it.
+    """
 
     def __init__(self, redis_client) -> None:
         self._redis = redis_client
         self._pubsub = redis_client.pubsub()
-        self._pubsub.subscribe(TOPIC)
+        self._queues: set[asyncio.Queue[dict]] = set()
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        await self._pubsub.subscribe(TOPIC)
+        self._task = asyncio.create_task(self._dispatch())
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        with contextlib.suppress(Exception):
+            await self._pubsub.unsubscribe(TOPIC)
 
     async def publish(self, event: dict) -> None:
         await self._redis.publish(TOPIC, json.dumps(event, default=str))
 
     def subscribe(self, maxsize: int = 256) -> asyncio.Queue[dict]:
         queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=maxsize)
-        asyncio.create_task(self._pump(queue))
+        self._queues.add(queue)
         return queue
 
-    async def _pump(self, queue: asyncio.Queue[dict]) -> None:
+    def unsubscribe(self, queue: asyncio.Queue[dict]) -> None:
+        self._queues.discard(queue)
+
+    async def _dispatch(self) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             async for message in self._pubsub.listen():
                 if message.get("type") != "message":
                     continue
                 try:
-                    queue.put_nowait(json.loads(message["data"]))
-                except (asyncio.QueueFull, json.JSONDecodeError):
+                    event = json.loads(message["data"])
+                except json.JSONDecodeError:
                     continue
-
-    def unsubscribe(self, queue: asyncio.Queue[dict]) -> None:  # noqa: ARG002
-        # pump task ends when the queue is garbage-collected / WS closes
-        return None
+                for queue in list(self._queues):
+                    with contextlib.suppress(asyncio.QueueFull):
+                        queue.put_nowait(event)
 
 
 _bus: EventBus | None = None
