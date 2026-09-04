@@ -1,0 +1,64 @@
+name: net-twin
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nettwin
+      POSTGRES_PASSWORD: nettwin
+      POSTGRES_DB: nettwin
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nettwin -d nettwin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://nettwin:nettwin@db:5432/nettwin
+      REDIS_URL: redis://redis:6379/0
+      DISCOVERY_SOURCE: ${DISCOVERY_SOURCE:-simulator}
+      DISCOVERY_SUBNET: ${DISCOVERY_SUBNET:-10.0.0.0/24}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:
+  redisdata:
