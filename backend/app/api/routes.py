@@ -1,8 +1,9 @@
 """REST API routes: health, topology, devices, metrics, alerts, analysis."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -153,6 +154,20 @@ async def list_alerts(
     if status:
         stmt = stmt.where(Alert.status == status)
     return [AlertOut.model_validate(a) for a in (await db.scalars(stmt)).all()]
+
+
+@router.get("/reports/health.pdf", tags=["reports"])
+async def health_report(db: AsyncSession = Depends(get_session)) -> Response:
+    """Render the current twin state as a downloadable PDF health report."""
+    from app.reports.generator import generate_health_report
+
+    pdf_bytes = await generate_health_report(db)
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="net-twin-health-{stamp}.pdf"'},
+    )
 
 
 @router.post("/discovery/run", tags=["system"])

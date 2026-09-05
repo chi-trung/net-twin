@@ -158,3 +158,15 @@ async def test_link_traffic_series(client, db_session):
 
     resp = await client.get("/api/v1/links/999/metrics")
     assert resp.status_code == 404
+
+
+async def test_health_report_pdf(client, db_session):
+    await _seed_campus(db_session)
+    resp = await client.get("/api/v1/reports/health.pdf")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert "attachment" in resp.headers["content-disposition"]
+    body = resp.content
+    assert body[:5] == b"%PDF-"  # real PDF magic
+    assert body.rstrip().endswith(b"%%EOF")  # complete document
+    assert len(body) > 1000  # non-trivial document
