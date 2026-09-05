@@ -31,6 +31,12 @@ OID_ARP_IP = "1.3.6.1.2.1.4.22.1.4"
 # LLDP-MIB remote system name / management address (802.1AB)
 OID_LLDP_REM_SYSNAME = "1.0.8802.1.1.2.1.4.1.1.9"
 OID_LLDP_REM_MGMT_ADDR = "1.0.8802.1.1.2.1.4.1.2.1"  # lldpRemManAddrTable (subset)
+# CISCO-CDP-MIB: cdpInterfaceTable + cdpCacheTable
+OID_CDP_IF_NAME = "1.3.6.1.4.1.9.9.23.1.1.1.1.6"  # cdpInterfaceName
+OID_CDP_CACHE_DEV_ID = "1.3.6.1.4.1.9.9.23.1.2.1.1.6"  # cdpCacheDeviceId
+OID_CDP_CACHE_DEV_PORT = "1.3.6.1.4.1.9.9.23.1.2.1.1.7"  # cdpCacheDevicePort
+OID_CDP_CACHE_PLATFORM = "1.3.6.1.4.1.9.9.23.1.2.1.1.8"  # cdpCachePlatform
+OID_CDP_CACHE_ADDR = "1.3.6.1.4.1.9.9.23.1.2.1.1.4"  # cdpCacheAddress (ip)
 
 # ifType values of interest (IANAifType-MIB)
 IFTYPE_ETHERNET = 6
@@ -115,6 +121,44 @@ def _fmt_mac(raw: object) -> str | None:
     if len(text) == 12 and all(c in "0123456789abcdefABCDEF" for c in text):
         return ":".join(text[i : i + 2] for i in range(0, 12, 2)).lower()
     return text.lower()
+
+
+def _walk_rows_to_neighbor_records(
+    cache_rows: dict[tuple, dict[str, object]],
+    if_names: dict[int, str],
+) -> list[dict]:
+    """Turn raw CDP cache walks into LLDP-shaped neighbor records.
+
+    cache_rows is indexed by (if_index, cache_index) with columns:
+        c0 = cdpCacheDeviceId, c1 = cdpCacheDevicePort,
+        c2 = cdpCachePlatform, c3 = cdpCacheAddress (4-byte IP octets)
+    Output records match the LLDP matcher's shape:
+        {"remote_chassis_id", "remote_system_name", "remote_mgmt_ip",
+         "local_if_name"}
+    """
+    records: list[dict] = []
+    for idx, row in cache_rows.items():
+        if_index = idx[0] if idx else None
+        device_id = row.get("c0")
+        if not device_id or if_index is None:
+            continue
+        records.append(
+            {
+                "remote_chassis_id": str(device_id),
+                "remote_system_name": str(device_id),
+                "remote_port": str(row.get("c1") or "") or None,
+                "remote_mgmt_ip": _octets_to_ip(row.get("c3")),
+                "local_if_name": if_names.get(if_index),
+            }
+        )
+    return records
+
+
+def _octets_to_ip(raw: object) -> str | None:
+    """Render a 4-byte SNMP octet string as a dotted-quad IPv4 address."""
+    if isinstance(raw, bytes) and len(raw) == 4:
+        return ".".join(str(b) for b in raw)
+    return None
 
 
 class SnmpCollector:
@@ -280,3 +324,32 @@ class SnmpCollector:
             if name:
                 neighbors.append({"remote_system_name": str(name), "remote_mgmt_ip": None})
         return neighbors
+
+    async def collect_cdp(self, ip: str) -> list[dict]:
+        """Return CDP neighbor records in the LLDP matcher's shape.
+
+        Walks CISCO-CDP-MIB cdpCacheTable; empty when the device is not a
+        Cisco box or the MIB is unavailable.
+        """
+        try:
+            cache_rows = await self._walk_table(
+                ip,
+                [
+                    OID_CDP_CACHE_DEV_ID,
+                    OID_CDP_CACHE_DEV_PORT,
+                    OID_CDP_CACHE_PLATFORM,
+                    OID_CDP_CACHE_ADDR,
+                ],
+            )
+            if_rows = await self._walk_table(ip, [OID_CDP_IF_NAME])
+        except ImportError:
+            return []
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("CDP walk failed for %s: %s", ip, exc)
+            return []
+        if_names = {
+            int(idx[0]): str(row.get("c0"))
+            for idx, row in if_rows.items()
+            if idx and row.get("c0")
+        }
+        return _walk_rows_to_neighbor_records(cache_rows, if_names)

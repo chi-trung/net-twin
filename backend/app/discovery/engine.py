@@ -20,7 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 
 from .builder import BuildReport, build_twin
-from .links import dedupe_links, links_from_arp, links_from_lldp_neighbors
+from .links import (
+    dedupe_links,
+    links_from_arp,
+    links_from_cdp_neighbors,
+    links_from_lldp_neighbors,
+)
 from .models import DiscoveredDevice, DiscoveryResult
 from .simulator import SimulatorSource
 from .sweeper import sweep_subnet
@@ -69,9 +74,11 @@ class LiveSource:
         # have, correlate by MAC to seed ARP links between known devices.
         arp_tables = await self._collect_arp_tables(collector, by_ip)
         lldp_neighbors = await self._collect_lldp(collector, by_ip)
+        cdp_neighbors = await self._collect_cdp(collector, by_ip)
 
         links = dedupe_links(
             links_from_lldp_neighbors(lldp_neighbors, by_ip)
+            + links_from_cdp_neighbors(cdp_neighbors, by_ip)
             + links_from_arp(arp_tables, by_ip)
         )
         return DiscoveryResult(devices=devices, links=links)
@@ -94,6 +101,18 @@ class LiveSource:
         for ip in by_ip:
             try:
                 recs = await collector.collect_lldp(ip)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                recs = []
+            if recs:
+                neighbors[ip] = recs
+        return neighbors
+
+    async def _collect_cdp(self, collector, by_ip) -> dict[str, list[dict]]:
+        """Best-effort CDP neighbors (Cisco gear). Empty when unavailable."""
+        neighbors: dict[str, list[dict]] = {}
+        for ip in by_ip:
+            try:
+                recs = await collector.collect_cdp(ip)  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 recs = []
             if recs:
