@@ -33,6 +33,10 @@ from .schemas import (
     MetricSeriesOut,
     OverviewOut,
     PathOut,
+    RcaDeviceOut,
+    RcaEvidenceOut,
+    RcaHypothesisOut,
+    RcaOut,
     TopologyOut,
     TrafficPoint,
     WhatIfOut,
@@ -267,6 +271,68 @@ async def whatif_failure(device_id: int, db: AsyncSession = Depends(get_session)
         impacted_count=radius.impacted_count,
     )
 
+
+@router.get("/analysis/rca/{device_id}", response_model=RcaOut, tags=["analysis"])
+async def root_cause_analysis(
+    device_id: int, db: AsyncSession = Depends(get_session)
+) -> RcaOut:
+    """Ranked root-cause hypotheses for a symptom device, from live alerts
+    and the twin topology."""
+    from app.analysis.rca import AlertFact, DeviceFacts, analyze
+
+    devices, _adjacency = await _load_graph(db)
+    device = devices.get(device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail=f"device {device_id} not found")
+
+    link_pairs = [
+        (lnk.source_device_id, lnk.target_device_id)
+        for lnk in (await db.scalars(select(Link))).all()
+    ]
+
+    root_id = _root_id(devices)
+    facts = {
+        d.id: DeviceFacts(
+            id=d.id, name=d.name, health=d.health.value, device_type=d.device_type.value
+        )
+        for d in devices.values()
+    }
+    active = (await db.scalars(select(Alert).where(Alert.status == AlertStatus.ACTIVE))).all()
+    alert_facts = [
+        AlertFact(
+            id=a.id, device_id=a.device_id, rule=a.rule,
+            severity=a.severity.value, message=a.message,
+        )
+        for a in active
+    ]
+
+    hypotheses = analyze(
+        device_id, facts, link_pairs, root_id, alert_facts
+    )
+    return RcaOut(
+        symptom=RcaDeviceOut(
+            id=device.id, name=device.name, health=device.health.value,
+            device_type=device.device_type.value,
+        ),
+        hypotheses=[
+            RcaHypothesisOut(
+                device=RcaDeviceOut(
+                    id=h.device.id, name=h.device.name, health=h.device.health,
+                    device_type=h.device.device_type,
+                ),
+                score=h.score,
+                headline=h.headline,
+                reasons=h.reasons,
+                evidence=[
+                    RcaEvidenceOut(
+                        alert_id=e.id, rule=e.rule, severity=e.severity, message=e.message
+                    )
+                    for e in h.evidence_alerts
+                ],
+            )
+            for h in hypotheses
+        ],
+    )
 
 @router.get("/topology/path", response_model=PathOut, tags=["analysis"])
 async def trace_path(

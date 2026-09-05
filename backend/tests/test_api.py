@@ -1,6 +1,6 @@
 """API smoke tests for Phase 2."""
 
-from app.db.models import Device, DeviceType, HealthState, Link
+from app.db.models import Alert, AlertSeverity, AlertStatus, Device, DeviceType, HealthState, Link
 
 
 async def test_healthz(client):
@@ -82,6 +82,47 @@ async def test_whatif_access_switch_cuts_host(client, db_session):
 async def test_whatif_unknown_device_404(client, db_session):
     await _seed_campus(db_session)
     resp = await client.post("/api/v1/analysis/whatif/999")
+    assert resp.status_code == 404
+
+
+async def test_rca_points_at_down_uplink(client, db_session):
+    """host down with its access switch down → RCA names the switch."""
+    core, _dist, acc, host = await _seed_campus(db_session)
+    acc.health = HealthState.DOWN
+    host.health = HealthState.DOWN
+    await db_session.commit()
+
+    resp = await client.get(f"/api/v1/analysis/rca/{host.id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symptom"]["id"] == host.id
+    assert body["hypotheses"], "no hypotheses for a down host"
+    assert body["hypotheses"][0]["device"]["id"] == acc.id
+    assert any("only uplink" in r for r in body["hypotheses"][0]["reasons"])
+
+
+async def test_rca_uses_active_alerts_as_evidence(client, db_session):
+    core, dist, acc, host = await _seed_campus(db_session)
+    acc.health = HealthState.DOWN
+    host.health = HealthState.DOWN
+    alert = Alert(
+        device_id=dist.id, rule="node_down", severity=AlertSeverity.CRITICAL,
+        status=AlertStatus.ACTIVE, message="dist-sw-01 is DOWN",
+    )
+    db_session.add(alert)
+    await db_session.commit()
+
+    resp = await client.get(f"/api/v1/analysis/rca/{host.id}")
+    body = resp.json()
+    top = body["hypotheses"][0]
+    # dist carries a critical alert + disconnects host → outranks acc
+    assert top["device"]["id"] == dist.id
+    assert top["evidence"][0]["alert_id"] == alert.id
+
+
+async def test_rca_unknown_device_404(client, db_session):
+    await _seed_campus(db_session)
+    resp = await client.get("/api/v1/analysis/rca/999")
     assert resp.status_code == 404
 
 

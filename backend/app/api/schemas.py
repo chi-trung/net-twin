@@ -115,3 +115,29 @@ class AlertOut(ORMModel):
     threshold: float | None = None
     created_at: datetime
     cleared_at: datetime | None = None
+
+
+# ── root-cause analysis ────────────────────────────────────────────
+
+class RcaDeviceOut(BaseModel):
+    id: int
+    name: str
+    health: str
+    device_type: str
+
+class RcaEvidenceOut(BaseModel):
+    alert_id: int
+    rule: str
+    severity: str
+    message: str
+
+class RcaHypothesisOut(BaseModel):
+    device: RcaDeviceOut
+    score: float
+    headline: str
+    reasons: list[str]
+    evidence: list[RcaEvidenceOut]
+
+class RcaOut(BaseModel):
+    symptom: RcaDeviceOut
+    hypotheses: list[RcaHypothesisOut]
