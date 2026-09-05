@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { MetricsChart } from './MetricsChart';
+import { RcaPanel } from './RcaPanel';
 
 interface Props {
   deviceId: number;
@@ -34,6 +35,8 @@ export function DeviceDetailPanel({ deviceId, onClose }: Props) {
       </div>
 
       {device.sys_description && <p className="sysdesc">{device.sys_description}</p>}
+
+      {device.health !== 'up' && <RcaPanel deviceId={deviceId} />}
 
       <h4>Interfaces</h4>
       {device.interfaces.length === 0 ? (

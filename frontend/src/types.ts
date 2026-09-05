@@ -101,6 +101,33 @@ export type TwinEvent =
 
 // ── twin intelligence ──────────────────────────────────────────────
 
+export interface RcaDevice {
+  id: number;
+  name: string;
+  health: HealthState;
+  device_type: DeviceType;
+}
+
+export interface RcaEvidence {
+  alert_id: number;
+  rule: string;
+  severity: AlertSeverity;
+  message: string;
+}
+
+export interface RcaHypothesis {
+  device: RcaDevice;
+  score: number;
+  headline: string;
+  reasons: string[];
+  evidence: RcaEvidence[];
+}
+
+export interface RcaResult {
+  symptom: RcaDevice;
+  hypotheses: RcaHypothesis[];
+}
+
 export interface WhatIfResult {
   failed_device: Device;
   isolated: Device[];

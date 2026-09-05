@@ -1,7 +1,7 @@
 /** Typed HTTP client for the net-twin REST API. */
 
 import axios from 'axios';
-import type { Alert, DeviceDetail, LinkTraffic, MetricSeries, Overview, PathResult, Topology, WhatIfResult } from '../types';
+import type { Alert, DeviceDetail, LinkTraffic, MetricSeries, Overview, PathResult, RcaResult, Topology, WhatIfResult } from '../types';
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -24,6 +24,8 @@ export const api = {
   runMonitor: () => http.post('/monitor/run').then((r) => r.data),
   whatIf: (deviceId: number) =>
     http.post<WhatIfResult>(`/analysis/whatif/${deviceId}`).then((r) => r.data),
+  rca: (deviceId: number) =>
+    http.get<RcaResult>(`/analysis/rca/${deviceId}`).then((r) => r.data),
   tracePath: (fromId: number, toId: number) =>
     http
       .get<PathResult>('/topology/path', { params: { from: fromId, to: toId } })

@@ -649,3 +649,105 @@ body {
     opacity: 1;
   }
 }
+
+/* ── root-cause analysis panel ───────────────────────── */
+.rca-panel {
+  margin: 12px 0;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.rca-panel h4 {
+  margin: 0 0 8px;
+}
+
+.rca-card {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.rca-card.rca-top {
+  border-color: var(--down);
+  box-shadow: 0 0 0 1px var(--down) inset;
+}
+
+.rca-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.rca-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--border);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rca-score {
+  margin-left: auto;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.rca-reason {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.rca-reason::before {
+  content: '• ';
+  color: var(--text-dim);
+}
+
+.rca-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.rca-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+/* ── severity chips (shared: rca evidence, whatif report) ── */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.chip-critical {
+  border-color: var(--down);
+  color: var(--down);
+}
+
+.chip-warning {
+  border-color: var(--degraded);
+  color: var(--degraded);
+}
+
+.chip-info {
+  border-color: var(--accent);
+  color: var(--accent);
+}
