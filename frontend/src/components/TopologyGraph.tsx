@@ -91,12 +91,15 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
       if (!cy) return;
       clearHighlight();
 
-      if (mode === 'explore') {
+      // The cy tap listener is registered once (see the topology effect
+      // below), so a closure over `mode` would be stale — read the live
+      // mode from the ref instead.
+      if (modeRef.current === 'explore') {
         onSelectDevice(id);
         return;
       }
 
-      if (mode === 'whatif') {
+      if (modeRef.current === 'whatif') {
         whatIfMutation.mutate(id, {
           onSuccess: (result) => {
             setWhatIf(result);
@@ -131,7 +134,7 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode, onSelectDevice, clearHighlight],
+    [onSelectDevice, clearHighlight],
   );
 
   // ── build/refresh elements when topology (re)loads ──────────────
@@ -232,6 +235,8 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
         const id = Number(evt.target.id());
         if (!Number.isNaN(id)) onSelectLink(id);
       });
+      // expose for console debugging and the e2e harness
+      (window as unknown as Record<string, unknown>).cy = cyRef.current;
     } else {
       cyRef.current.elements().remove();
       cyRef.current.add(elements);
