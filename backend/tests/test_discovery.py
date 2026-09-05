@@ -2,7 +2,14 @@
 
 from app.db.models import DeviceType, HealthState
 from app.discovery.builder import build_twin
-from app.discovery.links import dedupe_links, links_from_arp, links_from_lldp_neighbors
+from app.discovery.links import (
+    PROTOCOL_RANK,
+    dedupe_links,
+    links_from_arp,
+    links_from_cdp_neighbors,
+    links_from_lldp_neighbors,
+    protocol_rank,
+)
 from app.discovery.models import DiscoveredDevice, DiscoveredInterface, DiscoveredLink
 from app.discovery.simulator import simulate_topology
 from app.discovery.snmp import _fmt_mac, build_interfaces, classify_device

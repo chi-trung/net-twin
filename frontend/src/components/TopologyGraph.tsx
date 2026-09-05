@@ -312,7 +312,9 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
       {mode === 'travel' && (
         <TimeTravelPanel
           onPickGraph={(graph) => setTravelGraph(graph)}
-          onExit={() => setTravelGraph(null)}
+          // leaving time travel entirely — the mode-reset effect clears the
+          // historical graph and restores the live view
+          onExit={() => setMode('explore')}
         />
       )}
 
