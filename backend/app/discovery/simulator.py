@@ -26,7 +26,11 @@ def _iface(index: int, name: str, mac: str, speed: int = 1000) -> DiscoveredInte
 
 def simulate_topology(seed: int | None = None) -> DiscoveryResult:
     """Return a fake campus network: 1 core router, 2 dist switches,
-    4 access switches, and a handful of hosts."""
+    4 access switches, and a handful of hosts.
+
+    Link provenance mirrors real gear: core↔dist runs LLDP, dist↔access is
+    CDP (Cisco-to-Cisco), access↔host correlates by ARP (hosts speak neither).
+    """
     rng = random.Random(seed)
     devices: list[DiscoveredDevice] = []
     links: list[DiscoveredLink] = []
@@ -89,7 +93,7 @@ def simulate_topology(seed: int | None = None) -> DiscoveryResult:
                     target_ip=acc.ip_address,
                     source_if_name="Gi1/0/24",
                     target_if_name="Gi0/1",
-                    protocol="lldp",
+                    protocol="cdp",
                 )
             )
             for _ in range(2):
