@@ -161,7 +161,17 @@ async def test_link_traffic_series(client, db_session):
 
 
 async def test_health_report_pdf(client, db_session):
-    await _seed_campus(db_session)
+    from datetime import UTC, datetime
+
+    from app.db.models import MetricSample
+
+    core, _dist, _acc, _host = await _seed_campus(db_session)
+    # exercise the top-talker section: needs at least one traffic sample
+    db_session.add(MetricSample(device_id=core.id, interface_id=None,
+                                metric_name="if_out_bps", value=42.0,
+                                timestamp=datetime.now(UTC).replace(tzinfo=None)))
+    await db_session.commit()
+
     resp = await client.get("/api/v1/reports/health.pdf")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"

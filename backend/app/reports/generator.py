@@ -182,7 +182,7 @@ async def generate_health_report(db: AsyncSession) -> bytes:
     # ── top-talker links ───────────────────────────────────────────
     _section(pdf, "Top-talker links (latest throughput)")
     rows = (
-        await db.execute(
+        await db.scalars(
             select(MetricSample)
             .where(MetricSample.metric_name == "if_out_bps")
             .order_by(MetricSample.timestamp.desc())
