@@ -56,9 +56,6 @@ class MonitorScheduler:
             else None
         )
         self._tasks: list[asyncio.Task] = []
-        # fire-and-forget anomaly evaluations; strong refs so the loop does
-        # not garbage-collect them mid-flight (asyncio only holds weak refs)
-        self._bg_tasks: set[asyncio.Task] = set()
         self._stop = asyncio.Event()
 
     # ── lifecycle ──────────────────────────────────────────────────
@@ -159,24 +156,24 @@ class MonitorScheduler:
                     ),
                 )
 
-                # statistical anomaly check on the latency series
+                # statistical anomaly check on the latency series; evaluated
+                # every cycle (verdict may be None) so in-policy samples can
+                # clear a firing alert
                 if self.anomalies is not None and result.latency_ms is not None:
-                    verdict = self.anomalies.observe(
-                        ("latency", device.id), "latency_ms", result.latency_ms
+                    series_key = ("latency", device.id)
+                    verdict = self.anomalies.observe(series_key, "latency_ms", result.latency_ms)
+                    await self.alerts.evaluate(
+                        db,
+                        Observation(
+                            device_id=device.id,
+                            device_name=device.name,
+                            anomaly=verdict,
+                            anomaly_series=series_key,
+                        ),
                     )
-                    if verdict is not None:
-                        await self.alerts.evaluate(
-                            db,
-                            Observation(
-                                device_id=device.id,
-                                device_name=device.name,
-                                anomaly=verdict,
-                                anomaly_series=("latency", device.id),
-                            ),
-                        )
 
             if self.settings.discovery_source == "simulator":
-                self._sample_link_traffic(db, links, device_by_id, now)
+                await self._sample_link_traffic(db, links, device_by_id, now)
 
             await db.commit()
             await publish_event(
@@ -184,7 +181,7 @@ class MonitorScheduler:
             )
             logger.debug("monitor cycle done for %d devices", len(devices))
 
-    def _sample_link_traffic(
+    async def _sample_link_traffic(
         self,
         db,
         links: list[Link],
@@ -195,10 +192,10 @@ class MonitorScheduler:
 
         Live deployments would read SNMP ifInOctets/ifOutOctets and convert
         via MetricStore.rate; the simulator has no counters, so the traffic
-        model generates plausible values directly. Each series also runs
-        through the anomaly detector; failed endpoints drop their links'
-        traffic to zero, which reads as a low-side anomaly on a normally
-        busy link.
+        model generates plausible values directly. Each series runs through
+        the anomaly detector every cycle (verdict may be None, which clears);
+        failed endpoints drop their links' traffic to zero, which reads as a
+        low-side anomaly against a normally busy link.
         """
         from app.monitor.traffic import link_base_bps, traffic_bps
 
@@ -233,28 +230,15 @@ class MonitorScheduler:
                 if self.anomalies is not None:
                     series_key = ("traffic", lnk.id, interface_id, direction)
                     verdict = self.anomalies.observe(series_key, "traffic_bps", bps)
-                    if verdict is not None:
-                        self._spawn(self._traffic_anomaly_alert(endpoint, verdict, series_key))
-
-    def _spawn(self, coro) -> None:
-        """Schedule a coroutine without losing it to garbage collection."""
-        task = asyncio.create_task(coro)
-        self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
-
-    async def _traffic_anomaly_alert(self, device: Device, verdict, series_key) -> None:
-        """Raise/clear the traffic_anomaly rule for one traffic series."""
-        async with SessionLocal() as db:
-            await self.alerts.evaluate(
-                db,
-                Observation(
-                    device_id=device.id,
-                    device_name=device.name,
-                    anomaly=verdict,
-                    anomaly_series=series_key,
-                ),
-            )
-            await db.commit()
+                    await self.alerts.evaluate(
+                        db,
+                        Observation(
+                            device_id=endpoint.id,
+                            device_name=endpoint.name,
+                            anomaly=verdict,
+                            anomaly_series=series_key,
+                        ),
+                    )
 
 
 # process-wide scheduler, wired in the app lifespan
