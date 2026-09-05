@@ -20,6 +20,7 @@ from app.db.models import (
     Interface,
     Link,
     MetricSample,
+    Snapshot,
 )
 from app.db.session import get_session
 
@@ -37,6 +38,12 @@ from .schemas import (
     RcaEvidenceOut,
     RcaHypothesisOut,
     RcaOut,
+    SnapshotDiffCounts,
+    SnapshotDiffOut,
+    SnapshotNodeOut,
+    SnapshotEdgeOut,
+    SnapshotOut,
+    SnapshotSummaryOut,
     TopologyOut,
     TrafficPoint,
     WhatIfOut,
@@ -363,6 +370,124 @@ async def trace_path(
         devices=[DeviceOut.model_validate(devices[i]) for i in path_ids],
         link_ids=link_ids,
     )
+
+
+# ── topology history / time travel ─────────────────────────────────
+
+MAX_SNAPSHOT_LIMIT = 500
+
+
+@router.get("/snapshots", response_model=list[SnapshotSummaryOut], tags=["history"])
+async def list_snapshots(
+    db: AsyncSession = Depends(get_session),
+    limit: int = Query(default=100, le=MAX_SNAPSHOT_LIMIT),
+) -> list[SnapshotSummaryOut]:
+    """Timeline of stored twin-graph snapshots, newest first."""
+    rows = (await db.scalars(select(Snapshot).order_by(Snapshot.taken_at.desc()).limit(limit))).all()
+    out: list[SnapshotSummaryOut] = []
+    for s in rows:
+        graph = s.graph or {}
+        out.append(
+            SnapshotSummaryOut(
+                id=s.id,
+                taken_at=s.taken_at,
+                trigger=s.trigger,
+                node_count=len(graph.get("nodes", [])),
+                edge_count=len(graph.get("edges", [])),
+            )
+        )
+    return out
+
+
+@router.post("/snapshots", response_model=SnapshotSummaryOut, tags=["history"])
+async def create_snapshot(
+    db: AsyncSession = Depends(get_session),
+    trigger: str = Query(default="manual"),
+) -> SnapshotSummaryOut:
+    """Capture a snapshot of the current twin graph right now."""
+    from app.history.store import take_snapshot
+
+    snap = await take_snapshot(db, trigger=trigger)
+    await db.commit()
+    graph = snap.graph or {}
+    return SnapshotSummaryOut(
+        id=snap.id,
+        taken_at=snap.taken_at,
+        trigger=snap.trigger,
+        node_count=len(graph.get("nodes", [])),
+        edge_count=len(graph.get("edges", [])),
+    )
+
+
+@router.get("/snapshots/{snapshot_id}/diff", response_model=SnapshotDiffOut, tags=["history"])
+async def snapshot_diff(
+    snapshot_id: int,
+    db: AsyncSession = Depends(get_session),
+    against: str = Query(default="live"),
+) -> SnapshotDiffOut:
+    """Diff a past snapshot against the live graph (default) or another
+    snapshot id (`against=<id>`) — what changed between "then" and "now"."""
+    from app.history.store import capture_graph, diff_graphs
+
+    snap = await db.get(Snapshot, snapshot_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail=f"snapshot {snapshot_id} not found")
+
+    if against == "live":
+        devices = (await db.scalars(select(Device))).all()
+        links = (await db.scalars(select(Link))).all()
+        new_graph = capture_graph(list(devices), list(links))
+        new_id = 0  # 0 = live (not a stored snapshot)
+    else:
+        try:
+            other_id = int(against)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"bad against value {against!r}")
+        other = await db.get(Snapshot, other_id)
+        if other is None:
+            raise HTTPException(status_code=404, detail=f"snapshot {other_id} not found")
+        new_graph = other.graph or {}
+        new_id = other.id
+
+    diff = diff_graphs(snap.graph or {}, new_graph)
+    name_by_id = {n["id"]: n for n in (snap.graph or {}).get("nodes", [])}
+    if against != "live":
+        name_by_id.update({n["id"]: n for n in new_graph.get("nodes", [])})
+
+    return SnapshotDiffOut(
+        snapshot_id=new_id,
+        summary=SnapshotDiffCounts(
+            added_nodes=len(diff.added_nodes),
+            removed_nodes=len(diff.removed_nodes),
+            added_edges=len(diff.added_edges),
+            removed_edges=len(diff.removed_edges),
+            health_changes=len(diff.health_changes),
+        ),
+        added_nodes=[SnapshotNodeOut.model_validate(n) for n in diff.added_nodes],
+        removed_nodes=[SnapshotNodeOut.model_validate(n) for n in diff.removed_nodes],
+        added_edges=[SnapshotEdgeOut.model_validate(e) for e in diff.added_edges],
+        removed_edges=[SnapshotEdgeOut.model_validate(e) for e in diff.removed_edges],
+        health_changes=[
+            (
+                name_by_id.get(nid, {}).get("name", f"device {nid}"),
+                name_by_id.get(nid, {}).get("ip_address", "?"),
+                old_h,
+                new_h,
+            )
+            for nid, (old_h, new_h) in diff.health_changes.items()
+        ],
+    )
+
+
+@router.get("/snapshots/{snapshot_id}", response_model=SnapshotOut, tags=["history"])
+async def get_snapshot(
+    snapshot_id: int, db: AsyncSession = Depends(get_session)
+) -> SnapshotOut:
+    """Full graph captured in one snapshot (for rendering the past topology)."""
+    snap = await db.get(Snapshot, snapshot_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail=f"snapshot {snapshot_id} not found")
+    return SnapshotOut.model_validate(snap)
 
 
 @router.get("/overview", response_model=OverviewOut, tags=["analysis"])

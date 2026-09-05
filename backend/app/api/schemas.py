@@ -141,3 +141,48 @@ class RcaHypothesisOut(BaseModel):
 class RcaOut(BaseModel):
     symptom: RcaDeviceOut
     hypotheses: list[RcaHypothesisOut]
+
+# ── topology history / time travel ─────────────────────────────────
+
+class SnapshotSummaryOut(BaseModel):
+    id: int
+    taken_at: datetime
+    trigger: str
+    node_count: int
+    edge_count: int
+
+class SnapshotDiffCounts(BaseModel):
+    added_nodes: int
+    removed_nodes: int
+    added_edges: int
+    removed_edges: int
+    health_changes: int
+
+class SnapshotNodeOut(BaseModel):
+    id: int
+    name: str
+    ip_address: str
+    device_type: str
+    health: str
+
+class SnapshotEdgeOut(BaseModel):
+    id: int
+    source_device_id: int
+    target_device_id: int
+    protocol: str
+    health: str
+
+class SnapshotDiffOut(BaseModel):
+    snapshot_id: int
+    summary: SnapshotDiffCounts
+    added_nodes: list[SnapshotNodeOut]
+    removed_nodes: list[SnapshotNodeOut]
+    added_edges: list[SnapshotEdgeOut]
+    removed_edges: list[SnapshotEdgeOut]
+    health_changes: list[tuple[str, str, str, str]]  # name, ip, old, new
+
+class SnapshotOut(ORMModel):
+    id: int
+    taken_at: datetime
+    trigger: str
+    graph: dict
