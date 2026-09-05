@@ -221,3 +221,75 @@ async def test_health_report_pdf(client, db_session):
     assert body[:5] == b"%PDF-"  # real PDF magic
     assert body.rstrip().endswith(b"%%EOF")  # complete document
     assert len(body) > 1000  # non-trivial document
+
+
+# ── topology history / time travel ─────────────────────────────────
+
+async def test_snapshot_lifecycle_and_diff(client, db_session):
+    from app.history.store import take_snapshot
+
+    core, dist, acc, host = await _seed_campus(db_session)
+
+    # snapshot 1: all healthy
+    snap1 = await take_snapshot(db_session, trigger="manual")
+    await db_session.commit()
+
+    # evolve the network: dist goes down, host is removed, a new device joins
+    dist.health = HealthState.DOWN
+    await db_session.delete(host)
+    newcomer = Device(name="host-new", ip_address="10.0.101.99",
+                      device_type=DeviceType.HOST, health=HealthState.UP)
+    db_session.add(newcomer)
+    await db_session.commit()
+
+    resp = await client.post("/api/v1/snapshots?trigger=manual")
+    assert resp.status_code == 200
+    snap2 = resp.json()
+    assert snap2["trigger"] == "manual"
+    assert snap2["node_count"] == 4
+
+    # diff past → live
+    resp = await client.get(f"/api/v1/snapshots/{snap1.id}/diff")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["added_nodes"] == 1
+    assert body["summary"]["removed_nodes"] == 1
+    assert body["summary"]["health_changes"] == 1
+    assert body["added_nodes"][0]["name"] == "host-new"
+    assert body["removed_nodes"][0]["name"] == "host-011"
+    assert body["health_changes"][0][0] == "dist-sw-01"
+    assert body["health_changes"][0][2] == "up"
+    assert body["health_changes"][0][3] == "down"
+
+    # diff snapshot → snapshot
+    resp = await client.get(f"/api/v1/snapshots/{snap1.id}/diff?against={snap2['id']}")
+    assert resp.status_code == 200
+    body2 = resp.json()
+    assert body2["snapshot_id"] == snap2["id"]
+    assert body2["summary"] == body["summary"]
+
+    # timeline lists both
+    resp = await client.get("/api/v1/snapshots")
+    ids = [s["id"] for s in resp.json()]
+    assert snap1.id in ids and snap2["id"] in ids
+
+    # full graph fetch
+    resp = await client.get(f"/api/v1/snapshots/{snap1.id}")
+    assert resp.status_code == 200
+    assert len(resp.json()["graph"]["nodes"]) == 4
+
+    # unknown snapshot → 404
+    resp = await client.get("/api/v1/snapshots/999/diff")
+    assert resp.status_code == 404
+    resp = await client.get("/api/v1/snapshots/999")
+    assert resp.status_code == 404
+
+
+async def test_snapshot_diff_against_bad_value_400(client, db_session):
+    await _seed_campus(db_session)
+    from app.history.store import take_snapshot
+
+    snap = await take_snapshot(db_session, trigger="manual")
+    await db_session.commit()
+    resp = await client.get(f"/api/v1/snapshots/{snap.id}/diff?against=notanid")
+    assert resp.status_code == 400
