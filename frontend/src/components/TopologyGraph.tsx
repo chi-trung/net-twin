@@ -128,7 +128,7 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
           clearHighlight();
           if (result.found) {
             result.device_ids.forEach((nid) => cy.getElementById(String(nid)).addClass('path'));
-            result.link_ids.forEach((lid) => cy.getElementById(String(lid)).addClass('path'));
+            result.link_ids.forEach((lid) => cy.getElementById(`link-${lid}`).addClass('path'));
           }
         },
       });
@@ -152,10 +152,14 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
           ip: n.ip_address,
         },
       })),
+      // Cytoscape element ids are global across node/edge groups — a bare
+      // numeric link id would collide with a device id and be silently
+      // dropped on cy.add(), so edge ids get a `link-` namespace.
       ...topology.edges.map((e) => ({
         group: 'edges' as const,
         data: {
-          id: String(e.id),
+          id: `link-${e.id}`,
+          linkId: e.id,
           source: String(e.source_device_id),
           target: String(e.target_device_id),
           protocol: e.protocol,
@@ -232,8 +236,8 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
       });
       cyRef.current.on('tap', 'edge', (evt) => {
         if (modeRef.current !== 'explore') return;
-        const id = Number(evt.target.id());
-        if (!Number.isNaN(id)) onSelectLink(id);
+        const linkId = Number(evt.target.data('linkId'));
+        if (!Number.isNaN(linkId)) onSelectLink(linkId);
       });
       // expose for console debugging and the e2e harness
       (window as unknown as Record<string, unknown>).cy = cyRef.current;
