@@ -56,6 +56,9 @@ class MonitorScheduler:
             else None
         )
         self._tasks: list[asyncio.Task] = []
+        # fire-and-forget anomaly evaluations; strong refs so the loop does
+        # not garbage-collect them mid-flight (asyncio only holds weak refs)
+        self._bg_tasks: set[asyncio.Task] = set()
         self._stop = asyncio.Event()
 
     # ── lifecycle ──────────────────────────────────────────────────
@@ -231,11 +234,13 @@ class MonitorScheduler:
                     series_key = ("traffic", lnk.id, interface_id, direction)
                     verdict = self.anomalies.observe(series_key, "traffic_bps", bps)
                     if verdict is not None:
-                        # fire-and-forget: evaluate() is async but the traffic
-                        # sampler is sync — schedule it on the running loop
-                        asyncio.get_running_loop().create_task(
-                            self._traffic_anomaly_alert(endpoint, verdict, series_key)
-                        )
+                        self._spawn(self._traffic_anomaly_alert(endpoint, verdict, series_key))
+
+    def _spawn(self, coro) -> None:
+        """Schedule a coroutine without losing it to garbage collection."""
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     async def _traffic_anomaly_alert(self, device: Device, verdict, series_key) -> None:
         """Raise/clear the traffic_anomaly rule for one traffic series."""
