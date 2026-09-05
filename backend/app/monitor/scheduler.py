@@ -21,7 +21,7 @@ from sqlalchemy import select
 
 from app.core.config import Settings, get_settings
 from app.db.base import utcnow
-from app.db.models import Device, HealthState
+from app.db.models import Device, HealthState, Link, MetricSample
 from app.db.session import SessionLocal
 from app.discovery.engine import run_discovery
 from app.events.bus import publish_event
@@ -112,6 +112,8 @@ class MonitorScheduler:
     async def run_monitor_cycle(self) -> None:
         async with SessionLocal() as db:
             devices = (await db.scalars(select(Device))).all()
+            device_by_id = {d.id: d for d in devices}
+            links = (await db.scalars(select(Link))).all()
             now = utcnow()
             for device in devices:
                 result = await self.probe.probe(device.ip_address)
@@ -144,11 +146,55 @@ class MonitorScheduler:
                         packet_loss_pct=result.packet_loss_pct,
                     ),
                 )
+
+            if self.settings.discovery_source == "simulator":
+                self._sample_link_traffic(db, links, device_by_id, now)
+
             await db.commit()
             await publish_event(
                 "metrics.flushed", devices=len(devices), timestamp=now.isoformat()
             )
             logger.debug("monitor cycle done for %d devices", len(devices))
+
+    def _sample_link_traffic(
+        self,
+        db,
+        links: list[Link],
+        device_by_id: dict[int, Device],
+        now,
+    ) -> None:
+        """Record simulated per-link throughput (bps) for each direction.
+
+        Live deployments would read SNMP ifInOctets/ifOutOctets and convert
+        via MetricStore.rate; the simulator has no counters, so the traffic
+        model generates plausible values directly.
+        """
+        from app.monitor.traffic import link_base_bps, traffic_bps
+
+        ts = now.timestamp()
+        for lnk in links:
+            src = device_by_id.get(lnk.source_device_id)
+            dst = device_by_id.get(lnk.target_device_id)
+            if src is None or dst is None:
+                continue
+            base = link_base_bps(src.device_type, dst.device_type, lnk.id)
+            for interface_id, direction in (
+                (lnk.source_interface_id, "out"),  # source → target egress
+                (lnk.target_interface_id, "in"),  # target ingress
+            ):
+                if interface_id is None:
+                    continue
+                bps = traffic_bps(base, lnk.id, ts, direction)
+                name = f"if_{direction}_bps"
+                db.add(
+                    MetricSample(
+                        device_id=src.id if direction == "out" else dst.id,
+                        interface_id=interface_id,
+                        metric_name=name,
+                        value=round(bps, 1),
+                        timestamp=now,
+                    )
+                )
 
 
 # process-wide scheduler, wired in the app lifespan

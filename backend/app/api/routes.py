@@ -1,5 +1,7 @@
 """REST API routes: health, topology, devices, metrics, alerts, analysis."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -8,7 +10,16 @@ from sqlalchemy.orm import selectinload
 
 from app.analysis.graph import blast_radius, build_adjacency, shortest_path
 from app.core.outages import get_outages
-from app.db.models import Alert, AlertStatus, Device, DeviceType, HealthState, Link, MetricSample
+from app.db.models import (
+    Alert,
+    AlertStatus,
+    Device,
+    DeviceType,
+    HealthState,
+    Interface,
+    Link,
+    MetricSample,
+)
 from app.db.session import get_session
 
 from .schemas import (
@@ -16,11 +27,13 @@ from .schemas import (
     DeviceDetail,
     DeviceOut,
     LinkOut,
+    LinkTrafficOut,
     MetricPoint,
     MetricSeriesOut,
     OverviewOut,
     PathOut,
     TopologyOut,
+    TrafficPoint,
     WhatIfOut,
 )
 
@@ -87,6 +100,47 @@ async def get_device_metrics(
         metric_name=metric,
         points=[MetricPoint(timestamp=r.timestamp, value=r.value) for r in rows],
     )
+
+
+@router.get("/links/{link_id}/metrics", response_model=LinkTrafficOut, tags=["metrics"])
+async def get_link_traffic(
+    link_id: int,
+    db: AsyncSession = Depends(get_session),
+    limit: int = Query(default=500, le=5000),
+) -> LinkTrafficOut:
+    """Recent in/out throughput (bps) for one link, both directions merged
+    into one series keyed by timestamp."""
+    lnk = await db.get(Link, link_id)
+    if lnk is None:
+        raise HTTPException(status_code=404, detail=f"link {link_id} not found")
+
+    stmt = (
+        select(MetricSample)
+        .where(
+            MetricSample.interface_id.in_(
+                select(Interface.id)
+                .where(Interface.id.in_(_link_interface_ids(lnk)))
+            ),
+            MetricSample.metric_name.in_(["if_in_bps", "if_out_bps"]),
+        )
+        .order_by(MetricSample.timestamp.desc())
+        .limit(limit)
+    )
+    rows = list(reversed((await db.scalars(stmt)).all()))
+
+    by_ts: dict[datetime, dict[str, float | None]] = {}
+    for r in rows:
+        by_ts.setdefault(r.timestamp, {})[r.metric_name] = r.value
+    points = [
+        TrafficPoint(timestamp=ts, in_bps=v.get("if_in_bps"), out_bps=v.get("if_out_bps"))
+        for ts, v in sorted(by_ts.items())
+    ]
+    return LinkTrafficOut(link_id=link_id, points=points)
+
+
+def _link_interface_ids(lnk: Link) -> list[int]:
+    ids = [lnk.source_interface_id, lnk.target_interface_id]
+    return [i for i in ids if i is not None]
 
 
 @router.get("/alerts", response_model=list[AlertOut], tags=["alerts"])

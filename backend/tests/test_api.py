@@ -113,3 +113,48 @@ async def test_overview_counts(client, db_session):
     assert body["down"] == 1
     assert body["total_links"] == 3
     assert body["active_alerts"] == 0
+
+
+# ── link traffic endpoint ──────────────────────────────────────────
+
+async def test_link_traffic_series(client, db_session):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from app.db.models import Interface, MetricSample
+
+    core, dist, _acc, _host = await _seed_campus(db_session)
+    if_core = Interface(device_id=core.id, if_index=1, name="Gi0/0/0", oper_status="up")
+    if_dist = Interface(device_id=dist.id, if_index=1, name="Gi1/0/24", oper_status="up")
+    db_session.add_all([if_core, if_dist])
+    await db_session.commit()
+    # reuse the core↔dist link the seeder already created
+    link = (await db_session.scalars(
+        select(Link).where(Link.source_device_id == core.id, Link.target_device_id == dist.id)
+    )).one()
+    link.source_interface_id = if_core.id
+    link.target_interface_id = if_dist.id
+    await db_session.commit()
+
+    base = datetime.now(UTC).replace(tzinfo=None)
+    for i in range(3):
+        ts = base + timedelta(seconds=i)
+        db_session.add_all([
+            MetricSample(device_id=core.id, interface_id=if_core.id,
+                         metric_name="if_out_bps", value=100.0 + i, timestamp=ts),
+            MetricSample(device_id=dist.id, interface_id=if_dist.id,
+                         metric_name="if_in_bps", value=80.0 + i, timestamp=ts),
+        ])
+    await db_session.commit()
+
+    resp = await client.get(f"/api/v1/links/{link.id}/metrics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["link_id"] == link.id
+    assert len(body["points"]) == 3
+    assert body["points"][0]["in_bps"] == 80.0
+    assert body["points"][0]["out_bps"] == 100.0
+
+    resp = await client.get("/api/v1/links/999/metrics")
+    assert resp.status_code == 404

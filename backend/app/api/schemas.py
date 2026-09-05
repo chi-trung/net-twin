@@ -81,6 +81,17 @@ class OverviewOut(BaseModel):
     avg_latency_ms: float | None
     healthiest_updated_at: datetime | None = None
 
+# ── link traffic ───────────────────────────────────────────────────
+
+class TrafficPoint(BaseModel):
+    timestamp: datetime
+    in_bps: float | None = None
+    out_bps: float | None = None
+
+class LinkTrafficOut(BaseModel):
+    link_id: int
+    points: list[TrafficPoint]
+
 
 class MetricPoint(BaseModel):
     timestamp: datetime
