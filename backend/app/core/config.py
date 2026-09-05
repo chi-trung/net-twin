@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     alert_latency_threshold_ms: float = 200.0
     alert_packet_loss_threshold_pct: float = 10.0
 
+    # --- anomaly detection ---
+    anomaly_detection_enabled: bool = True
+    anomaly_min_samples: int = 10
+    anomaly_z_threshold: float = 3.5
+
 
 @lru_cache
 def get_settings() -> Settings:

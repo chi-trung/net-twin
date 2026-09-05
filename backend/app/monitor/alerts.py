@@ -5,6 +5,8 @@ An AlertEngine is fed observations (device health, metric values) and emits
 firing per device so a sustained condition raises once, not every poll.
 
 Rules are plain functions (Observation -> bool) so new checks are one-liners.
+Statistical anomalies detected upstream (app.monitor.anomaly) ride on the
+observation as AnomalyVerdicts and get their own rules below.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from dataclasses import dataclass
 from app.db.base import utcnow
 from app.db.models import Alert, AlertSeverity, AlertStatus
 from app.events.bus import publish_event
+from app.monitor.anomaly import AnomalyVerdict, format_bps
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,7 @@ class Observation:
     health: str | None = None
     latency_ms: float | None = None
     packet_loss_pct: float | None = None
+    anomaly: AnomalyVerdict | None = None
 
 
 @dataclass
@@ -68,6 +72,29 @@ def default_rules(
             f">= {loss_threshold_pct:.0f}%",
             value=lambda o: o.packet_loss_pct,
             threshold=loss_threshold_pct,
+        ),
+        # ── statistical anomaly rules (one verdict per observation) ──
+        Rule(
+            name="traffic_anomaly",
+            severity=AlertSeverity.WARNING,
+            predicate=lambda o: o.anomaly is not None and o.anomaly.metric == "traffic",
+            message=lambda o: (
+                f"{o.device_name} traffic {o.anomaly.direction} anomaly: "
+                f"{format_bps(o.anomaly.value)} vs baseline "
+                f"{format_bps(o.anomaly.baseline_mean)} "
+                f"(z={o.anomaly.z_score:.1f})"
+            ),
+            value=lambda o: o.anomaly.value if o.anomaly else None,
+        ),
+        Rule(
+            name="latency_anomaly",
+            severity=AlertSeverity.WARNING,
+            predicate=lambda o: o.anomaly is not None and o.anomaly.metric == "latency",
+            message=lambda o: (
+                f"{o.device_name} latency anomaly: {o.anomaly.value:.1f}ms vs baseline "
+                f"{o.anomaly.baseline_mean:.1f}ms (z={o.anomaly.z_score:.1f})"
+            ),
+            value=lambda o: o.anomaly.value if o.anomaly else None,
         ),
     ]
 
