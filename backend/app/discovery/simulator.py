@@ -45,6 +45,7 @@ def simulate_topology(seed: int | None = None) -> DiscoveryResult:
     devices.append(core)
 
     dist_switches = []
+    core_if_seq = 0  # each core port faces one dist switch
     for i in (1, 2):
         sw = DiscoveredDevice(
             ip_address=f"10.0.{i}.1",
@@ -56,8 +57,15 @@ def simulate_topology(seed: int | None = None) -> DiscoveryResult:
         )
         devices.append(sw)
         dist_switches.append(sw)
+        core_if_seq += 1
         links.append(
-            DiscoveredLink(source_ip=core.ip_address, target_ip=sw.ip_address, protocol="lldp")
+            DiscoveredLink(
+                source_ip=core.ip_address,
+                target_ip=sw.ip_address,
+                source_if_name=f"Gi0/0/{core_if_seq}",
+                target_if_name="Gi1/0/24",
+                protocol="lldp",
+            )
         )
 
     host_counter = 10
@@ -77,7 +85,11 @@ def simulate_topology(seed: int | None = None) -> DiscoveryResult:
             devices.append(acc)
             links.append(
                 DiscoveredLink(
-                    source_ip=dist.ip_address, target_ip=acc.ip_address, protocol="lldp"
+                    source_ip=dist.ip_address,
+                    target_ip=acc.ip_address,
+                    source_if_name="Gi1/0/24",
+                    target_if_name="Gi0/1",
+                    protocol="lldp",
                 )
             )
             for _ in range(2):
@@ -93,7 +105,11 @@ def simulate_topology(seed: int | None = None) -> DiscoveryResult:
                 devices.append(host)
                 links.append(
                     DiscoveredLink(
-                        source_ip=acc.ip_address, target_ip=host.ip_address, protocol="arp"
+                        source_ip=acc.ip_address,
+                        target_ip=host.ip_address,
+                        source_if_name="Gi0/2",
+                        target_if_name="eth0",
+                        protocol="arp",
                     )
                 )
 

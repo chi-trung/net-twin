@@ -141,6 +141,16 @@ async def _sync_links(
         frozenset({lnk.source_device_id, lnk.target_device_id}): lnk for lnk in existing_links
     }
 
+    async def _iface_id(device: Device, if_name: str | None) -> int | None:
+        """Resolve a discovered interface name to its twin id, if known."""
+        if if_name is None:
+            return None
+        await db.refresh(device, ["interfaces"])
+        for iface in device.interfaces:
+            if iface.name == if_name:
+                return iface.id
+        return None
+
     for dl in result.links:
         src = devices_by_ip.get(dl.source_ip)
         dst = devices_by_ip.get(dl.target_ip)
@@ -166,3 +176,10 @@ async def _sync_links(
                 link.protocol = dl.protocol
                 report.links_updated += 1
                 report.changed = True
+        # keep endpoint interfaces resolved as discovery evidence improves
+        new_src_if = await _iface_id(src, dl.source_if_name)
+        new_dst_if = await _iface_id(dst, dl.target_if_name)
+        if new_src_if != link.source_interface_id or new_dst_if != link.target_interface_id:
+            link.source_interface_id = new_src_if or link.source_interface_id
+            link.target_interface_id = new_dst_if or link.target_interface_id
+            report.changed = True
