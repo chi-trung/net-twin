@@ -1,7 +1,20 @@
 /** Typed HTTP client for the net-twin REST API. */
 
 import axios from 'axios';
-import type { Alert, DeviceDetail, LinkTraffic, MetricSeries, Overview, PathResult, RcaResult, Topology, WhatIfResult } from '../types';
+import type {
+  Alert,
+  DeviceDetail,
+  LinkTraffic,
+  MetricSeries,
+  Overview,
+  PathResult,
+  RcaResult,
+  Snapshot,
+  SnapshotDiff,
+  SnapshotSummary,
+  Topology,
+  WhatIfResult,
+} from '../types';
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -36,4 +49,14 @@ export const api = {
   simulateOutage: (ip: string) =>
     http.post('/sim/outages', { ip_address: ip }).then((r) => r.data),
   clearOutage: (ip: string) => http.delete(`/sim/outages/${ip}`).then((r) => r.data),
+  snapshots: (limit = 100) =>
+    http.get<SnapshotSummary[]>('/snapshots', { params: { limit } }).then((r) => r.data),
+  snapshot: (id: number) => http.get<Snapshot>(`/snapshots/${id}`).then((r) => r.data),
+  snapshotDiff: (id: number, against?: number) =>
+    http
+      .get<SnapshotDiff>(`/snapshots/${id}/diff`, {
+        params: against !== undefined ? { against: String(against) } : {},
+      })
+      .then((r) => r.data),
+  createSnapshot: () => http.post<SnapshotSummary>('/snapshots').then((r) => r.data),
 };

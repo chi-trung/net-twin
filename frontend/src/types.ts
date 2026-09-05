@@ -167,3 +167,57 @@ export interface LinkTraffic {
   link_id: number;
   points: TrafficPoint[];
 }
+
+// ── topology history / time travel ─────────────────────────────────
+
+export interface SnapshotSummary {
+  id: number;
+  taken_at: string;
+  trigger: 'discovery' | 'health' | 'manual' | string;
+  node_count: number;
+  edge_count: number;
+}
+
+export interface SnapshotNode {
+  id: number;
+  name: string;
+  ip_address: string;
+  device_type: DeviceType;
+  health: HealthState;
+}
+
+export interface SnapshotEdge {
+  id: number;
+  source_device_id: number;
+  target_device_id: number;
+  protocol: string;
+  health: HealthState;
+}
+
+export interface SnapshotGraph {
+  nodes: SnapshotNode[];
+  edges: SnapshotEdge[];
+}
+
+export interface Snapshot {
+  id: number;
+  taken_at: string;
+  trigger: string;
+  graph: SnapshotGraph;
+}
+
+export interface SnapshotDiff {
+  snapshot_id: number;
+  summary: {
+    added_nodes: number;
+    removed_nodes: number;
+    added_edges: number;
+    removed_edges: number;
+    health_changes: number;
+  };
+  added_nodes: SnapshotNode[];
+  removed_nodes: SnapshotNode[];
+  added_edges: SnapshotEdge[];
+  removed_edges: SnapshotEdge[];
+  health_changes: [name: string, ip: string, oldHealth: string, newHealth: string][];
+}
