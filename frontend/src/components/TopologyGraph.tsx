@@ -22,8 +22,9 @@ import cytoscape from 'cytoscape';
 import fcose from 'cytoscape-fcose';
 import { api } from '../api/client';
 import { twinStore } from '../state/twinStore';
-import type { PathResult, WhatIfResult } from '../types';
+import type { PathResult, SnapshotGraph, WhatIfResult } from '../types';
 import type { DeviceType, HealthState } from '../types';
+import { TimeTravelPanel } from './TimeTravelPanel';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (cytoscape as any).use?.(fcose);
@@ -44,7 +45,7 @@ const NODE_SHAPE: Record<DeviceType, string> = {
   unknown: 'ellipse',
 };
 
-type Mode = 'explore' | 'whatif' | 'path';
+type Mode = 'explore' | 'whatif' | 'path' | 'travel';
 
 interface Props {
   onSelectDevice: (id: number) => void;
@@ -63,6 +64,8 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
   const [pathResult, setPathResult] = useState<PathResult | null>(null);
   const pathPicksRef = useRef<number[]>([]); // first/second click in path mode
   const [pathPickCount, setPathPickCount] = useState(0);
+  // time-travel: graph snapshot currently displayed on the canvas (null = live)
+  const [travelGraph, setTravelGraph] = useState<SnapshotGraph | null>(null);
 
   const { data: topology } = useQuery({
     queryKey: ['topology', twin.topologyRevision],
@@ -139,10 +142,15 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
 
   // ── build/refresh elements when topology (re)loads ──────────────
   useEffect(() => {
-    if (!containerRef.current || !topology) return;
+    if (!containerRef.current) return;
+    // time-travel mode renders the historical graph, not the live one
+    const source = travelGraph ?? topology;
+    if (!source) return;
 
+    const nodes = 'nodes' in source ? source.nodes : [];
+    const edges = 'edges' in source ? source.edges : [];
     const elements: cytoscape.ElementDefinition[] = [
-      ...topology.nodes.map((n) => ({
+      ...nodes.map((n) => ({
         group: 'nodes' as const,
         data: {
           id: String(n.id),
@@ -155,7 +163,7 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
       // Cytoscape element ids are global across node/edge groups — a bare
       // numeric link id would collide with a device id and be silently
       // dropped on cy.add(), so edge ids get a `link-` namespace.
-      ...topology.edges.map((e) => ({
+      ...edges.map((e) => ({
         group: 'edges' as const,
         data: {
           id: `link-${e.id}`,
@@ -247,14 +255,16 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
     }
 
     cyRef.current.layout({ name: 'fcose', animate: false } as cytoscape.LayoutOptions).run();
-    applyHealth(cyRef.current, twin);
+    // historical views color from the snapshot itself — live health events
+    // must not repaint the past
+    if (!travelGraph) applyHealth(cyRef.current, twin);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topology]);
+  }, [topology, travelGraph]);
 
-  // live health recoloring on every twin event
+  // live health recoloring on every twin event (suppressed in time travel)
   useEffect(() => {
-    if (cyRef.current) applyHealth(cyRef.current, twin);
-  }, [twin]);
+    if (cyRef.current && !travelGraph) applyHealth(cyRef.current, twin);
+  }, [twin, travelGraph]);
 
   // switching mode resets any analysis overlay
   useEffect(() => {
@@ -263,6 +273,7 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
     setPathResult(null);
     pathPicksRef.current = [];
     setPathPickCount(0);
+    if (mode !== 'travel') setTravelGraph(null);
   }, [mode, clearHighlight]);
 
   useEffect(() => () => cyRef.current?.destroy(), []);
@@ -275,6 +286,7 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
             ['explore', '🔍 Explore'],
             ['whatif', '💥 What-if'],
             ['path', '🛣 Path'],
+            ['travel', '🕐 Time travel'],
           ] as const
         ).map(([m, label]) => (
           <button
@@ -292,9 +304,17 @@ export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
           </span>
         )}
         {mode === 'whatif' && <span className="tool-hint">click a device to simulate failure</span>}
+        {mode === 'travel' && <span className="tool-hint">pick a snapshot on the timeline</span>}
       </div>
 
       <div ref={containerRef} className="topology-canvas" />
+
+      {mode === 'travel' && (
+        <TimeTravelPanel
+          onPickGraph={(graph) => setTravelGraph(graph)}
+          onExit={() => setTravelGraph(null)}
+        />
+      )}
 
       {mode === 'whatif' && whatIf && (
         <div className="whatif-report">
