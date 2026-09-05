@@ -4,7 +4,7 @@ Upsert semantics (idempotent across discovery runs):
 - Device matched by ip_address → update identity fields, keep id stable.
 - Interface matched by (device, if_index).
 - Link matched by unordered device pair; protocol upgraded when a better
-  source (lldp > arp > inferred) reports the same edge.
+  source (manual > lldp > cdp > arp > inferred) reports the same edge.
 - Devices not seen in this run are marked DOWN (stale) rather than deleted —
   the twin remembers what it knew.
 """
@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Device, HealthState, Interface, Link
 
+from .links import protocol_rank
 from .models import DiscoveredDevice, DiscoveryResult
 
 logger = logging.getLogger(__name__)
@@ -32,9 +33,6 @@ class BuildReport:
     links_created: int = 0
     links_updated: int = 0
     changed: bool = field(default=False)
-
-
-_PROTOCOL_RANK = {"manual": 3, "lldp": 0, "cdp": 0, "arp": 1, "inferred": 2}
 
 
 async def build_twin(db: AsyncSession, result: DiscoveryResult) -> BuildReport:
@@ -170,9 +168,8 @@ async def _sync_links(
             report.links_created += 1
             report.changed = True
         else:
-            old_rank = _PROTOCOL_RANK.get(link.protocol, 9)
-            new_rank = _PROTOCOL_RANK.get(dl.protocol, 9)
-            if new_rank < old_rank:  # better evidence for the same edge
+            if protocol_rank(dl.protocol) < protocol_rank(link.protocol):
+                # better evidence for the same edge
                 link.protocol = dl.protocol
                 report.links_updated += 1
                 report.changed = True

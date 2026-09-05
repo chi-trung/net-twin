@@ -24,10 +24,51 @@ from .models import DiscoveredDevice, DiscoveredLink
 
 logger = logging.getLogger(__name__)
 
+# Link provenance ranking — lower is stronger evidence. Shared by the dedupe
+# pass here and by the builder's protocol-upgrade logic so both agree.
+# "manual" outranks everything: an operator-pinned edge must never be
+# superseded by automated discovery evidence.
+PROTOCOL_RANK: dict[str, int] = {
+    "manual": 0,
+    "lldp": 1,  # 802.1AB neighbor tables — the gold standard
+    "cdp": 2,  # Cisco Discovery Protocol — gold standard, Cisco-only
+    "arp": 3,  # MAC correlation — solid, but no port evidence on one end
+    "inferred": 4,  # weakest
+}
+
+_UNRANKED = len(PROTOCOL_RANK)
+
+
+def protocol_rank(protocol: str) -> int:
+    """Evidence strength of a link protocol; unknown protocols rank last."""
+    return PROTOCOL_RANK.get(protocol, _UNRANKED)
+
 
 def links_from_lldp_neighbors(
     neighbors: dict[str, list[dict]],
     devices_by_ip: dict[str, DiscoveredDevice],
+) -> list[DiscoveredLink]:
+    """Build links from per-device LLDP neighbor tables (protocol="lldp")."""
+    return _links_from_neighbor_tables(neighbors, devices_by_ip, protocol="lldp")
+
+
+def links_from_cdp_neighbors(
+    neighbors: dict[str, list[dict]],
+    devices_by_ip: dict[str, DiscoveredDevice],
+) -> list[DiscoveredLink]:
+    """Build links from per-device CDP neighbor tables (protocol="cdp").
+
+    CDP records share the LLDP matcher's shape (the CDP-MIB exposes the same
+    chassis-id / system-name / mgmt-address / port-id concepts), so the same
+    matching rules apply — only the provenance tag differs.
+    """
+    return _links_from_neighbor_tables(neighbors, devices_by_ip, protocol="cdp")
+
+
+def _links_from_neighbor_tables(
+    neighbors: dict[str, list[dict]],
+    devices_by_ip: dict[str, DiscoveredDevice],
+    protocol: str,
 ) -> list[DiscoveredLink]:
     """Build links from per-device LLDP/CDP neighbor tables.
 
@@ -61,7 +102,7 @@ def links_from_lldp_neighbors(
                     source_ip=local_ip,
                     target_ip=remote.ip_address,
                     source_if_name=rec.get("local_if_name"),
-                    protocol="lldp",
+                    protocol=protocol,
                 )
             )
     return links
@@ -115,14 +156,13 @@ def links_from_arp(
 
 
 def dedupe_links(links: list[DiscoveredLink]) -> list[DiscoveredLink]:
-    """Collapse duplicate edges; LLDP beats ARP beats generic inference."""
-    priority = {"lldp": 0, "cdp": 0, "arp": 1, "inferred": 2, "manual": 3}
+    """Collapse duplicate edges; strongest provenance wins, ties keep the first."""
     best: dict[frozenset[str], DiscoveredLink] = {}
     for link in links:
         pair = frozenset({link.source_ip, link.target_ip})
         current = best.get(pair)
-        if current is None or priority.get(link.protocol, 9) < priority.get(
-            current.protocol, 9
+        if current is None or protocol_rank(link.protocol) < protocol_rank(
+            current.protocol
         ):
             best[pair] = link
     return list(best.values())
