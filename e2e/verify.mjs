@@ -104,6 +104,7 @@ async function main() {
     await testPathTrace();
     await testLinkTraffic();
     await testPdfButton();
+    await testTimeTravel();
   } finally {
     await browser.close();
   }
@@ -358,6 +359,61 @@ async function testPdfButton() {
   check('PDF magic %PDF-', resp.magic === '%PDF-', resp.magic);
   check('PDF > 1KB', resp.size > 1000, `${resp.size} bytes`);
   check('button href correct', (await page.$eval('.export-btn', (el) => el.getAttribute('href'))) === '/api/v1/reports/health.pdf');
+  await page.close();
+}
+
+/* ── 6. time travel: snapshot timeline, pick, diff, back to live ────── */
+async function testTimeTravel() {
+  console.log('\n[6] time travel / snapshot timeline');
+  const page = await openPage();
+  await page.goto(BASE, { waitUntil: 'networkidle2', timeout: 30000 });
+  await page.waitForFunction(
+    () => /(\d+)\s+nodes/.exec(document.querySelector('.topbar-stats')?.textContent ?? '')?.[1] >= 15,
+    { timeout: 45000 }
+  );
+
+  // capture a fresh snapshot so the timeline is never empty
+  const captured = await page.evaluate(async () => {
+    const r = await fetch('/api/v1/snapshots', { method: 'POST' });
+    return r.json();
+  });
+  check('manual capture works', Boolean(captured?.id), `snapshot ${captured?.id}, ${captured?.node_count}n`);
+
+  // enter time-travel mode via the real toolbar button
+  await page.$$eval('.graph-toolbar .tool-btn', (btns) =>
+    btns.find((b) => b.textContent?.includes('Time travel'))?.click()
+  );
+  await page.waitForSelector('.time-travel', { timeout: 10000 });
+  check('time-travel panel opens', true);
+
+  const rows = await page.$$eval('.tt-point', (els) => els.length);
+  check('timeline lists snapshots', rows >= 1, `${rows} points`);
+
+  // pick the first (newest) snapshot → its graph renders on the canvas
+  await page.click('.tt-point');
+  await page.waitForFunction(
+    () => window.cy && window.cy.nodes().length > 0,
+    { timeout: 15000 }
+  );
+  const graphInfo = await page.evaluate(() => ({
+    nodes: window.cy.nodes().length,
+    edges: window.cy.edges().length,
+  }));
+  check('historical graph rendered on canvas', graphInfo.nodes >= 15,
+    `${graphInfo.nodes} nodes · ${graphInfo.edges} edges`);
+
+  // diff report for the picked snapshot appears inline
+  const diffShown = await page.waitForSelector('.tt-diff', { timeout: 10000 })
+    .then(() => true).catch(() => false);
+  check('diff report rendered', diffShown);
+
+  // back to live restores the interactive live view
+  await page.$$eval('.time-travel .tool-btn', (btns) =>
+    btns.find((b) => b.textContent?.includes('Back to live'))?.click()
+  );
+  await page.waitForFunction(() => !document.querySelector('.time-travel'), { timeout: 5000 });
+  check('back to live closes panel', true);
+  await page.screenshot({ path: path.join(SHOTS, '04-timetravel.png') });
   await page.close();
 }
 
