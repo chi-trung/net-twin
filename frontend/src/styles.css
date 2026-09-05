@@ -454,6 +454,24 @@ body {
   cursor: pointer;
 }
 
+/* ── export report button ─────────────────────────────── */
+.export-btn {
+  display: inline-block;
+  background: var(--bg-raised);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+.export-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* ── device detail panel ─────────────────────────────── */
 .detail-panel h3 {
   margin: 0 0 2px;

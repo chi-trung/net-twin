@@ -42,6 +42,9 @@ export default function App() {
           <span className="stat">
             {twin.nodes.size} nodes · {upCount} up · {twin.edges.size} links
           </span>
+          <a className="export-btn" href="/api/v1/reports/health.pdf" download>
+            ⬇ Report PDF
+          </a>
           <span className={`conn-badge conn-${status}`}>{STATUS_LABEL[status]}</span>
         </div>
       </header>
