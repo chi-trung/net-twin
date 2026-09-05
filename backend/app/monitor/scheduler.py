@@ -119,6 +119,10 @@ class MonitorScheduler:
         async with SessionLocal() as db:
             report = await run_discovery(db)
             if report.changed:
+                # history: the twin graph changed shape — remember "now"
+                from app.history.store import take_snapshot
+
+                await take_snapshot(db, trigger="discovery")
                 await publish_event(
                     "topology.updated",
                     devices_created=report.devices_created,
@@ -132,6 +136,7 @@ class MonitorScheduler:
             device_by_id = {d.id: d for d in devices}
             links = (await db.scalars(select(Link))).all()
             now = utcnow()
+            health_changed = False
             for device in devices:
                 result = await self.probe.probe(device.ip_address)
 
@@ -146,6 +151,7 @@ class MonitorScheduler:
                 new_health = HealthState.UP if result.reachable else HealthState.DOWN
                 if device.health != new_health:
                     device.health = new_health
+                    health_changed = True
                     await publish_event(
                         "device.health_changed",
                         device_id=device.id,
@@ -182,6 +188,12 @@ class MonitorScheduler:
 
             if self.settings.discovery_source == "simulator":
                 await self._sample_link_traffic(db, links, device_by_id, now)
+
+            if health_changed:
+                # history: the fleet's health picture moved — remember "now"
+                from app.history.store import take_snapshot
+
+                await take_snapshot(db, trigger="health")
 
             await db.commit()
             await publish_event(
