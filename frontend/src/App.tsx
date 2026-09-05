@@ -12,6 +12,7 @@ import { TopologyGraph } from './components/TopologyGraph';
 import { DeviceDetailPanel } from './components/DeviceDetailPanel';
 import { LinkDetailPanel } from './components/LinkDetailPanel';
 import { AlertFeed } from './components/AlertFeed';
+import { AlertToasts } from './components/AlertToasts';
 import { OverviewBar } from './components/OverviewBar';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -68,6 +69,7 @@ export default function App() {
           <AlertFeed />
         </aside>
       </main>
+      <AlertToasts />
     </div>
   );
 }

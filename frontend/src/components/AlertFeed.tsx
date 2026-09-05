@@ -34,7 +34,10 @@ export function AlertFeed() {
         <ul>
           {active.map((a) => (
             <li key={a.id} className={`alert alert-${a.severity}`}>
-              <span className="alert-rule">{a.rule}</span>
+              <span className="alert-rule">
+                {a.rule.endsWith('_anomaly') && <span title="statistical anomaly">📈 </span>}
+                {a.rule}
+              </span>
               <span className="alert-msg">{a.message}</span>
               <span className="alert-time">
                 {new Date(a.created_at).toLocaleTimeString()}

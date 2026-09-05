@@ -21,6 +21,9 @@ function initialState(): TwinState {
 
 let state = initialState();
 const listeners = new Set<() => void>();
+// raw-event listeners see every WS event before the snapshot updates — used
+// by UI chrome (toasts) that reacts to event *types*, not graph state
+const rawListeners = new Set<(event: TwinEvent) => void>();
 
 function emit() {
   for (const l of listeners) l();
@@ -34,12 +37,18 @@ export const twinStore = {
     listeners.add(listener);
     return () => listeners.delete(listener);
   },
+  /** Subscribe to individual events; returns an unsubscribe function. */
+  onRawEvent(listener: (event: TwinEvent) => void): () => void {
+    rawListeners.add(listener);
+    return () => rawListeners.delete(listener);
+  },
   reset() {
     state = initialState();
     emit();
   },
   /** Apply one realtime event immutably so React sees a new reference. */
   applyEvent(event: TwinEvent) {
+    for (const l of rawListeners) l(event);
     const nodes = new Map(state.nodes);
     const edges = new Map(state.edges);
     let topologyRevision = state.topologyRevision;
