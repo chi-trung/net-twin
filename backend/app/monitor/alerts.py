@@ -114,8 +114,33 @@ class AlertEngine:
 
     def __init__(self, rules: list[Rule]) -> None:
         self.rules = rules
-        # (device_id, rule_name) -> active Alert row id
-        self._firing: dict[tuple[int, str], int] = {}
+        # (device_id, rule_name, anomaly_series) -> active Alert row id
+        self._firing: dict[tuple[int, str, tuple | None], int] = {}
+
+    async def adopt_active(self, db) -> None:
+        """Re-arm firing state from ACTIVE alert rows left by a previous
+        process (restart wipes the in-memory map; without this the old rows
+        would zombie as active forever — never re-raised, never cleared).
+
+        Plain-rule alerts are adopted keyed by (device, rule). Anomaly-scoped
+        alerts cannot be reconstructed (their series key is not persisted),
+        so they are marked cleared here and will re-raise honestly once the
+        detector re-warms and flags again.
+        """
+        from sqlalchemy import select
+
+        scoped_names = {r.name for r in self.rules if r.anomaly_scoped}
+        active = (
+            await db.scalars(select(Alert).where(Alert.status == AlertStatus.ACTIVE))
+        ).all()
+        for alert in active:
+            if alert.rule in scoped_names:
+                alert.status = AlertStatus.CLEARED
+                alert.cleared_at = utcnow()
+            elif alert.device_id is not None:
+                self._firing[(alert.device_id, alert.rule, None)] = alert.id
+        if active:
+            logger.info("alert engine adopted %d active alert(s) from db", len(active))
 
     async def evaluate(self, db, observation: Observation) -> list[Alert]:
         """Run all rules against one observation; raise/clear as needed.

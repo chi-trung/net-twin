@@ -1,6 +1,6 @@
 """Tests for statistical anomaly detection and its alert wiring."""
 
-from app.db.models import Device, DeviceType, HealthState
+from app.db.models import AlertStatus, Device, DeviceType, HealthState
 from app.monitor.alerts import AlertEngine, Observation, default_rules
 from app.monitor.anomaly import MetricAnomalyDetector, format_bps
 
@@ -155,3 +155,40 @@ async def test_normal_sample_clears_series_anomaly(db_session):
     alerts = (await db_session.scalars(select(Alert))).all()
     assert alerts[0].status == AlertStatus.CLEARED
     assert alerts[0].cleared_at is not None
+
+
+async def test_adopt_active_reconciles_orphaned_rows(db_session):
+    """After a restart the in-memory firing map is gone; adopt_active must
+    re-arm plain-rule alerts and clear stale anomaly-scoped ones."""
+    from app.db.models import Alert as AlertModel, AlertSeverity
+
+    dev = Device(name="r1", ip_address="10.9.9.3", device_type=DeviceType.ROUTER,
+                 health=HealthState.UP)
+    db_session.add(dev)
+    await db_session.commit()
+
+    # a zombie plain-rule row and a zombie anomaly row, both "active"
+    zombie_plain = AlertModel(device_id=dev.id, rule="node_down",
+                              severity=AlertSeverity.CRITICAL,
+                              status=AlertStatus.ACTIVE, message="r1 is DOWN")
+    zombie_anom = AlertModel(device_id=dev.id, rule="traffic_anomaly",
+                             severity=AlertSeverity.WARNING,
+                             status=AlertStatus.ACTIVE, message="traffic low anomaly")
+    db_session.add_all([zombie_plain, zombie_anom])
+    await db_session.commit()
+
+    engine = _engine()
+    await engine.adopt_active(db_session)
+
+    # plain rule re-armed: re-raising the condition does NOT duplicate
+    raised = await engine.evaluate(db_session, Observation(
+        device_id=dev.id, device_name="r1", health="down"))
+    assert [a.rule for a in raised] == []
+    # anomaly row was cleared (series key not reconstructable)
+    assert zombie_anom.status == AlertStatus.CLEARED
+    assert zombie_anom.cleared_at is not None
+
+    # and the re-armed plain alert still clears when the device recovers
+    await engine.evaluate(db_session, Observation(
+        device_id=dev.id, device_name="r1", health="up"))
+    assert zombie_plain.status == AlertStatus.CLEARED

@@ -63,6 +63,7 @@ class MonitorScheduler:
     def start(self) -> None:
         self._stop.clear()
         self._tasks = [
+            asyncio.create_task(self._startup_adopt(), name="alert-adopt"),
             asyncio.create_task(self._monitor_loop(), name="monitor-loop"),
             asyncio.create_task(self._discovery_loop(), name="discovery-loop"),
         ]
@@ -72,6 +73,13 @@ class MonitorScheduler:
             self.settings.discovery_interval_seconds,
             self.settings.discovery_source,
         )
+
+    async def _startup_adopt(self) -> None:
+        """Reconcile alert firing state with ACTIVE rows left by a previous
+        process, so restarts don't leave zombie active alerts."""
+        async with SessionLocal() as db:
+            await self.alerts.adopt_active(db)
+            await db.commit()
 
     async def stop(self) -> None:
         self._stop.set()
