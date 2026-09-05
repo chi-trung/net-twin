@@ -95,6 +95,23 @@ def test_links_from_lldp_matches_by_ip_and_name():
     assert {links[0].source_ip, links[0].target_ip} == {"10.0.0.1", "10.0.0.2"}
 
 
+def test_links_from_cdp_matches_by_ip_and_name():
+    a = _dev("10.0.0.1", "core-rtr")
+    b = _dev("10.0.0.2", "dist-sw")
+    by_ip = {a.ip_address: a, b.ip_address: b}
+    neighbors = {
+        "10.0.0.1": [
+            {"remote_mgmt_ip": "10.0.0.2", "local_if_name": "Gi0/1"},
+            {"remote_system_name": "stranger"},  # unknown far end → skipped
+        ]
+    }
+    links = links_from_cdp_neighbors(neighbors, by_ip)
+    assert len(links) == 1
+    assert links[0].protocol == "cdp"
+    assert {links[0].source_ip, links[0].target_ip} == {"10.0.0.1", "10.0.0.2"}
+    assert links[0].source_if_name == "Gi0/1"
+
+
 def test_links_from_arp_correlates_macs():
     sw = _dev("10.0.0.2", "sw-01", macs=["aa:00:00:00:00:02"])
     host = _dev("10.0.0.50", "host-01", macs=["aa:00:00:00:00:50"])
@@ -114,6 +131,54 @@ def test_dedupe_links_prefers_lldp_over_arp():
     assert out[0].protocol == "lldp"
 
 
+def test_protocol_rank_ordering():
+    # manual outranks all automated evidence; unknown protocols rank last
+    assert PROTOCOL_RANK["manual"] < PROTOCOL_RANK["lldp"] < PROTOCOL_RANK["cdp"]
+    assert PROTOCOL_RANK["cdp"] < PROTOCOL_RANK["arp"] < PROTOCOL_RANK["inferred"]
+    assert protocol_rank("inferred") < protocol_rank("nonexistent-proto")
+
+
+def test_dedupe_links_manual_beats_lldp():
+    l1 = DiscoveredLink(source_ip="10.0.0.1", target_ip="10.0.0.2", protocol="lldp")
+    l2 = DiscoveredLink(source_ip="10.0.0.2", target_ip="10.0.0.1", protocol="manual")
+    out = dedupe_links([l1, l2])
+    assert len(out) == 1
+    assert out[0].protocol == "manual"
+
+
+def test_dedupe_links_tie_keeps_first():
+    l1 = DiscoveredLink(source_ip="10.0.0.1", target_ip="10.0.0.2",
+                        source_if_name="Gi0/1", protocol="cdp")
+    l2 = DiscoveredLink(source_ip="10.0.0.2", target_ip="10.0.0.1", protocol="cdp")
+    out = dedupe_links([l1, l2])
+    assert len(out) == 1
+    assert out[0].source_if_name == "Gi0/1"  # first report wins the tie
+
+
+def test_dedupe_links_cdp_beats_arp():
+    l1 = DiscoveredLink(source_ip="10.0.0.1", target_ip="10.0.0.2", protocol="arp")
+    l2 = DiscoveredLink(source_ip="10.0.0.2", target_ip="10.0.0.1", protocol="cdp")
+    out = dedupe_links([l1, l2])
+    assert len(out) == 1
+    assert out[0].protocol == "cdp"
+
+
+def test_cdp_cache_rows_to_neighbor_records():
+    from app.discovery.snmp import _walk_rows_to_neighbor_records
+
+    rows = {
+        (1, 1): {"c0": "core-rtr(SEP001)", "c1": "Gi0/0/1",
+                 "c2": "cisco ISR", "c3": b"\x0a\x00\x00\x01"},
+        (2, 1): {"c0": "", "c1": "Gi0/0/2"},  # no device id → skipped
+    }
+    if_names = {1: "Gi1/0/1", 2: "Gi1/0/2"}
+    recs = _walk_rows_to_neighbor_records(rows, if_names)
+    assert len(recs) == 1
+    assert recs[0]["remote_system_name"] == "core-rtr(SEP001)"
+    assert recs[0]["remote_mgmt_ip"] == "10.0.0.1"
+    assert recs[0]["local_if_name"] == "Gi1/0/1"
+
+
 # ── simulator ──────────────────────────────────────────────────────
 
 def test_simulate_topology_is_deterministic_and_connected():
@@ -124,6 +189,26 @@ def test_simulate_topology_is_deterministic_and_connected():
     ips = {d.ip_address for d in r1.devices}
     for link in r1.links:
         assert link.source_ip in ips and link.target_ip in ips
+
+
+def test_simulate_topology_link_provenance_mix():
+    links = simulate_topology(seed=42).links
+    by_protocol = {}
+    for link in links:
+        by_protocol.setdefault(link.protocol, []).append(link)
+    # core↔dist uplinks are LLDP, dist↔access CDP, access↔host ARP
+    assert len(by_protocol["lldp"]) == 2
+    assert len(by_protocol["cdp"]) == 4
+    assert len(by_protocol["arp"]) == 8
+    # every protocol tier touches exactly the device tiers it should:
+    # LLDP uplinks have the core router on one side; CDP links join a dist
+    # switch (10.0.[12].1) to an access switch (10.0.1xx.1)
+    assert all("10.0.0.1" in (l.source_ip, l.target_ip) for l in by_protocol["lldp"])
+    dist_ips = {"10.0.1.1", "10.0.2.1"}
+    for l in by_protocol["cdp"]:
+        endpoints = {l.source_ip, l.target_ip}
+        assert len(endpoints & dist_ips) == 1
+        assert any(ip.endswith(".1") and ip not in dist_ips for ip in endpoints)
 
 
 async def test_simulator_source_hides_outaged_devices():
@@ -196,3 +281,50 @@ async def test_build_twin_upgrades_link_protocol(db_session):
 
     link = (await db_session.scalars(select(Link))).one()
     assert link.protocol == "lldp"
+
+
+async def test_build_twin_upgrades_cdp_to_lldp_never_downgrades(db_session):
+    """Same edge seen by both CDP and LLDP: upgrade once, never flip back."""
+    from app.discovery.models import DiscoveryResult
+
+    a = DiscoveredDevice(ip_address="10.9.1.1", name="a")
+    b = DiscoveredDevice(ip_address="10.9.1.2", name="b")
+    cdp_link = DiscoveredLink(source_ip=a.ip_address, target_ip=b.ip_address, protocol="cdp")
+    await build_twin(db_session, DiscoveryResult(devices=[a, b], links=[cdp_link]))
+
+    # LLDP reports the same edge → upgraded
+    lldp_link = DiscoveredLink(source_ip=b.ip_address, target_ip=a.ip_address, protocol="lldp")
+    report = await build_twin(db_session, DiscoveryResult(devices=[a, b], links=[lldp_link]))
+    assert report.links_updated == 1
+
+    # a later CDP-only round must not downgrade the LLDP evidence
+    report2 = await build_twin(db_session, DiscoveryResult(devices=[a, b], links=[cdp_link]))
+    assert report2.links_updated == 0
+
+    from sqlalchemy import select
+
+    from app.db.models import Link
+
+    link = (await db_session.scalars(select(Link))).one()
+    assert link.protocol == "lldp"
+
+
+async def test_build_twin_manual_link_survives_discovery(db_session):
+    """An operator-pinned edge is never superseded by automated evidence."""
+    from app.discovery.models import DiscoveryResult
+
+    a = DiscoveredDevice(ip_address="10.9.2.1", name="a")
+    b = DiscoveredDevice(ip_address="10.9.2.2", name="b")
+    manual = DiscoveredLink(source_ip=a.ip_address, target_ip=b.ip_address, protocol="manual")
+    await build_twin(db_session, DiscoveryResult(devices=[a, b], links=[manual]))
+
+    lldp_link = DiscoveredLink(source_ip=b.ip_address, target_ip=a.ip_address, protocol="lldp")
+    report = await build_twin(db_session, DiscoveryResult(devices=[a, b], links=[lldp_link]))
+    assert report.links_updated == 0
+
+    from sqlalchemy import select
+
+    from app.db.models import Link
+
+    link = (await db_session.scalars(select(Link))).one()
+    assert link.protocol == "manual"
