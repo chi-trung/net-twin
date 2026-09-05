@@ -27,6 +27,7 @@ from app.discovery.engine import run_discovery
 from app.events.bus import publish_event
 
 from .alerts import AlertEngine, Observation, default_rules
+from .anomaly import MetricAnomalyDetector
 from .metrics import MetricStore
 from .probes import NullProbe, Probe, SystemPingProbe
 
@@ -45,6 +46,14 @@ class MonitorScheduler:
                 self.settings.alert_latency_threshold_ms,
                 self.settings.alert_packet_loss_threshold_pct,
             )
+        )
+        self.anomalies = (
+            MetricAnomalyDetector(
+                min_samples=self.settings.anomaly_min_samples,
+                z_threshold=self.settings.anomaly_z_threshold,
+            )
+            if self.settings.anomaly_detection_enabled
+            else None
         )
         self._tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
@@ -147,6 +156,22 @@ class MonitorScheduler:
                     ),
                 )
 
+                # statistical anomaly check on the latency series
+                if self.anomalies is not None and result.latency_ms is not None:
+                    verdict = self.anomalies.observe(
+                        ("latency", device.id), "latency_ms", result.latency_ms
+                    )
+                    if verdict is not None:
+                        await self.alerts.evaluate(
+                            db,
+                            Observation(
+                                device_id=device.id,
+                                device_name=device.name,
+                                anomaly=verdict,
+                                anomaly_series=("latency", device.id),
+                            ),
+                        )
+
             if self.settings.discovery_source == "simulator":
                 self._sample_link_traffic(db, links, device_by_id, now)
 
@@ -167,7 +192,10 @@ class MonitorScheduler:
 
         Live deployments would read SNMP ifInOctets/ifOutOctets and convert
         via MetricStore.rate; the simulator has no counters, so the traffic
-        model generates plausible values directly.
+        model generates plausible values directly. Each series also runs
+        through the anomaly detector; failed endpoints drop their links'
+        traffic to zero, which reads as a low-side anomaly on a normally
+        busy link.
         """
         from app.monitor.traffic import link_base_bps, traffic_bps
 
@@ -184,17 +212,44 @@ class MonitorScheduler:
             ):
                 if interface_id is None:
                     continue
-                bps = traffic_bps(base, lnk.id, ts, direction)
+                endpoint = src if direction == "out" else dst
+                down = endpoint.health == HealthState.DOWN
+                # a dead endpoint carries no traffic — the detector sees the
+                # drop against the link's usual load
+                bps = 0.0 if down else traffic_bps(base, lnk.id, ts, direction)
                 name = f"if_{direction}_bps"
                 db.add(
                     MetricSample(
-                        device_id=src.id if direction == "out" else dst.id,
+                        device_id=endpoint.id,
                         interface_id=interface_id,
                         metric_name=name,
                         value=round(bps, 1),
                         timestamp=now,
                     )
                 )
+                if self.anomalies is not None:
+                    series_key = ("traffic", lnk.id, interface_id, direction)
+                    verdict = self.anomalies.observe(series_key, "traffic_bps", bps)
+                    if verdict is not None:
+                        # fire-and-forget: evaluate() is async but the traffic
+                        # sampler is sync — schedule it on the running loop
+                        asyncio.get_running_loop().create_task(
+                            self._traffic_anomaly_alert(endpoint, verdict, series_key)
+                        )
+
+    async def _traffic_anomaly_alert(self, device: Device, verdict, series_key) -> None:
+        """Raise/clear the traffic_anomaly rule for one traffic series."""
+        async with SessionLocal() as db:
+            await self.alerts.evaluate(
+                db,
+                Observation(
+                    device_id=device.id,
+                    device_name=device.name,
+                    anomaly=verdict,
+                    anomaly_series=series_key,
+                ),
+            )
+            await db.commit()
 
 
 # process-wide scheduler, wired in the app lifespan

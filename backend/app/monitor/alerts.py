@@ -30,7 +30,11 @@ class Observation:
     health: str | None = None
     latency_ms: float | None = None
     packet_loss_pct: float | None = None
+    # statistical anomaly verdict for the sample this observation carries
+    # (app.monitor.anomaly); anomaly-scoped rules ONLY react to observations
+    # carrying a series key, so plain observations can never clear them
     anomaly: AnomalyVerdict | None = None
+    anomaly_series: tuple | None = None
 
 
 @dataclass
@@ -41,6 +45,10 @@ class Rule:
     message: Callable[[Observation], str]
     value: Callable[[Observation], float | None] = lambda o: None
     threshold: float | None = None
+    # anomaly-scoped rules raise/clear per metric series (keyed by the
+    # observation's anomaly_series); ordinary rules key per device and only
+    # react to observations without a series key
+    anomaly_scoped: bool = False
 
 
 def default_rules(
@@ -73,7 +81,7 @@ def default_rules(
             value=lambda o: o.packet_loss_pct,
             threshold=loss_threshold_pct,
         ),
-        # ── statistical anomaly rules (one verdict per observation) ──
+        # ── statistical anomaly rules (per metric series) ──
         Rule(
             name="traffic_anomaly",
             severity=AlertSeverity.WARNING,
@@ -85,6 +93,7 @@ def default_rules(
                 f"(z={o.anomaly.z_score:.1f})"
             ),
             value=lambda o: o.anomaly.value if o.anomaly else None,
+            anomaly_scoped=True,
         ),
         Rule(
             name="latency_anomaly",
@@ -95,6 +104,7 @@ def default_rules(
                 f"{o.anomaly.baseline_mean:.1f}ms (z={o.anomaly.z_score:.1f})"
             ),
             value=lambda o: o.anomaly.value if o.anomaly else None,
+            anomaly_scoped=True,
         ),
     ]
 
@@ -108,22 +118,32 @@ class AlertEngine:
         self._firing: dict[tuple[int, str], int] = {}
 
     async def evaluate(self, db, observation: Observation) -> list[Alert]:
-        """Run all rules against one observation; raise/clear as needed."""
+        """Run all rules against one observation; raise/clear as needed.
+
+        Anomaly-scoped rules only see observations carrying an anomaly_series
+        key (an actual sample of that series); ordinary rules only see the
+        others. This keeps e.g. a health observation from clearing a traffic
+        anomaly alert it knows nothing about, and keys firing state per
+        series so two interfaces of one device alert independently.
+        """
         changed: list[Alert] = []
+        is_scoped = observation.anomaly_series is not None
         for rule in self.rules:
-            key = (observation.device_id, rule.name)
+            if rule.anomaly_scoped != is_scoped:
+                continue
+            key = (observation.device_id, rule.name, observation.anomaly_series)
             firing = key in self._firing
             triggered = rule.predicate(observation)
 
             if triggered and not firing:
-                alert = await self._raise(db, rule, observation)
+                alert = await self._raise(db, rule, observation, key)
                 changed.append(alert)
             elif not triggered and firing:
                 await self._clear(db, rule, observation, key)
             # triggered and already firing → no duplicate alert
         return changed
 
-    async def _raise(self, db, rule: Rule, obs: Observation) -> Alert:
+    async def _raise(self, db, rule: Rule, obs: Observation, key) -> Alert:
         alert = Alert(
             device_id=obs.device_id,
             rule=rule.name,
@@ -135,7 +155,7 @@ class AlertEngine:
         )
         db.add(alert)
         await db.flush()  # get alert.id
-        self._firing[(obs.device_id, rule.name)] = alert.id
+        self._firing[key] = alert.id
         await publish_event(
             "alert.raised",
             alert_id=alert.id,
