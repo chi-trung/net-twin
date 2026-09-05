@@ -751,3 +751,107 @@ body {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ── time travel / snapshot timeline ───────────────────── */
+.time-travel {
+  margin-top: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  animation: slide-up 0.2s ease;
+}
+
+.tt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tt-head h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.tt-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.tt-empty {
+  margin: 8px 0 2px;
+}
+
+.tt-timeline {
+  margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tt-point {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tt-point:hover {
+  border-color: var(--accent);
+}
+
+.tt-point.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel));
+}
+
+.tt-icon {
+  flex: 0 0 auto;
+}
+
+.tt-time {
+  font-family: var(--font-mono, monospace);
+  color: var(--text);
+}
+
+.tt-meta {
+  margin-left: auto;
+  color: var(--text-dim);
+}
+
+.tt-diff {
+  margin: 4px 0 6px 14px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent);
+  background: var(--bg-panel);
+  border-radius: 0 6px 6px 0;
+}
+
+.tt-diff-stats,
+.tt-diff-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 4px 0;
+}
+
+.tt-diff-list {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.wi-add { color: var(--up); }
+.wi-del { color: #e74c3c; }
+.wi-chg { color: #f1c40f; }
