@@ -82,6 +82,9 @@ Because a production network is not always available, net-twin supports three da
 - [x] Phase 5 — Frontend scaffold (React + Vite + TS)
 - [x] Phase 6 — Topology UI (Cytoscape live graph + dashboard)
 - [x] Phase 7 — Docker Compose + operations docs
+- [x] Phase 8 — Twin intelligence (what-if blast radius, path tracing, overview KPIs)
+- [x] Phase 9 — Link traffic analytics (per-link in/out throughput + charts)
+- [x] Phase 10 — PDF health report export + docs finalization
 
 Next (stretch goals): what-if simulation on the twin graph, NetFlow collection,
 PDF report export, TimescaleDB retention policies.
