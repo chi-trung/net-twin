@@ -48,14 +48,17 @@ type Mode = 'explore' | 'whatif' | 'path';
 
 interface Props {
   onSelectDevice: (id: number) => void;
+  onSelectLink: (id: number) => void;
 }
 
-export function TopologyGraph({ onSelectDevice }: Props) {
+export function TopologyGraph({ onSelectDevice, onSelectLink }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
   const twin = useSyncExternalStore(twinStore.subscribe, twinStore.getSnapshot);
 
   const [mode, setMode] = useState<Mode>('explore');
+  const modeRef = useRef<Mode>('explore'); // live mode for handlers registered once
+  modeRef.current = mode;
   const [whatIf, setWhatIf] = useState<WhatIfResult | null>(null);
   const [pathResult, setPathResult] = useState<PathResult | null>(null);
   const pathPicksRef = useRef<number[]>([]); // first/second click in path mode
@@ -223,6 +226,11 @@ export function TopologyGraph({ onSelectDevice }: Props) {
       cyRef.current.on('tap', 'node', (evt) => {
         const id = Number(evt.target.id());
         if (!Number.isNaN(id)) handleNodeTap(id);
+      });
+      cyRef.current.on('tap', 'edge', (evt) => {
+        if (modeRef.current !== 'explore') return;
+        const id = Number(evt.target.id());
+        if (!Number.isNaN(id)) onSelectLink(id);
       });
     } else {
       cyRef.current.elements().remove();

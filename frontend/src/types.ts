@@ -129,3 +129,14 @@ export interface Overview {
   avg_latency_ms: number | null;
   healthiest_updated_at: string | null;
 }
+
+export interface TrafficPoint {
+  timestamp: string;
+  in_bps: number | null;
+  out_bps: number | null;
+}
+
+export interface LinkTraffic {
+  link_id: number;
+  points: TrafficPoint[];
+}

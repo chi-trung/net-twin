@@ -10,6 +10,7 @@ import type { TwinEvent } from './types';
 import { DeviceTable } from './components/DeviceTable';
 import { TopologyGraph } from './components/TopologyGraph';
 import { DeviceDetailPanel } from './components/DeviceDetailPanel';
+import { LinkDetailPanel } from './components/LinkDetailPanel';
 import { AlertFeed } from './components/AlertFeed';
 import { OverviewBar } from './components/OverviewBar';
 
@@ -22,6 +23,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default function App() {
   const [selectedDevice, setSelectedDevice] = useState<number | null>(null);
+  const [selectedLink, setSelectedLink] = useState<number | null>(null);
   const handleEvent = useCallback((event: TwinEvent) => twinStore.applyEvent(event), []);
   const { status } = useTwinEvents(handleEvent);
   const twin = useSyncExternalStore(twinStore.subscribe, twinStore.getSnapshot);
@@ -47,11 +49,16 @@ export default function App() {
         <section className="panel panel-graph">
           <OverviewBar />
           <h2>Topology</h2>
-          <TopologyGraph onSelectDevice={setSelectedDevice} />
+          <TopologyGraph
+            onSelectDevice={(id) => { setSelectedLink(null); setSelectedDevice(id); }}
+            onSelectLink={(id) => { setSelectedDevice(null); setSelectedLink(id); }}
+          />
         </section>
         <aside className="panel panel-side">
           {selectedDevice !== null ? (
             <DeviceDetailPanel deviceId={selectedDevice} onClose={() => setSelectedDevice(null)} />
+          ) : selectedLink !== null ? (
+            <LinkDetailPanel linkId={selectedLink} onClose={() => setSelectedLink(null)} />
           ) : (
             <DeviceTable />
           )}

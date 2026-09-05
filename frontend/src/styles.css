@@ -440,6 +440,20 @@ body {
   }
 }
 
+/* ── link detail panel ────────────────────────────────── */
+.link-facts {
+  font-size: 12px;
+  margin: 8px 0 4px;
+}
+
+.link-facts b {
+  color: var(--text);
+}
+
+.edge-cursor {
+  cursor: pointer;
+}
+
 /* ── device detail panel ─────────────────────────────── */
 .detail-panel h3 {
   margin: 0 0 2px;
