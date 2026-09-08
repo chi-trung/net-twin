@@ -168,6 +168,35 @@ export interface LinkTraffic {
   points: TrafficPoint[];
 }
 
+// ── forecasting / capacity planning ────────────────────────────────
+
+export interface ForecastPoint {
+  timestamp: string;
+  value: number;
+  lower: number;
+  upper: number;
+}
+
+export interface ForecastVerdict {
+  metric: string;
+  samples: number;
+  last_value: number;
+  slope_per_hour: number;
+  projected: number;
+  upper_band: number;
+  capacity: number;
+  risk: boolean;
+  eta_seconds: number | null;
+  eta_text: string | null;
+}
+
+export interface LinkForecast {
+  link_id: number;
+  direction: 'in' | 'out' | string;
+  verdict: ForecastVerdict | null;
+  points: ForecastPoint[];
+}
+
 // ── topology history / time travel ─────────────────────────────────
 
 export interface SnapshotSummary {

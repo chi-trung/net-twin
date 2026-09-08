@@ -4,6 +4,7 @@ import axios from 'axios';
 import type {
   Alert,
   DeviceDetail,
+  LinkForecast,
   LinkTraffic,
   MetricSeries,
   Overview,
@@ -46,6 +47,8 @@ export const api = {
   overview: () => http.get<Overview>('/overview').then((r) => r.data),
   linkTraffic: (linkId: number) =>
     http.get<LinkTraffic>(`/links/${linkId}/metrics`).then((r) => r.data),
+  linkForecast: (linkId: number) =>
+    http.get<LinkForecast>(`/links/${linkId}/forecast`).then((r) => r.data),
   simulateOutage: (ip: string) =>
     http.post('/sim/outages', { ip_address: ip }).then((r) => r.data),
   clearOutage: (ip: string) => http.delete(`/sim/outages/${ip}`).then((r) => r.data),
