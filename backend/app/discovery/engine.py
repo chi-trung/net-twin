@@ -28,7 +28,7 @@ from .links import (
 )
 from .models import DiscoveredDevice, DiscoveryResult
 from .simulator import SimulatorSource
-from .sweeper import sweep_subnet
+from .sweeper import snmp_sweep_subnet, sweep_subnet
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,19 @@ class LiveSource:
             retries=self.settings.snmp_retries,
         )
 
+        found = dict(sweep)
+        # SNMP sweep backfills devices the ICMP/TCP sweep cannot see
+        # (UDP-only agents, gear that drops ping): anything answering SNMP
+        # joins the inventory even without a MAC.
+        for ip in await snmp_sweep_subnet(
+            self.settings.discovery_subnet,
+            community=self.settings.snmp_community,
+            timeout=self.settings.snmp_timeout_seconds,
+        ):
+            found.setdefault(ip, None)
+
         devices: list[DiscoveredDevice] = []
-        for ip, mac in sweep:
+        for ip, mac in found.items():
             enriched = await collector.collect(ip)
             if enriched is not None:
                 enriched.mac_address = enriched.mac_address or mac
