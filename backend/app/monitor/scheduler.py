@@ -29,7 +29,7 @@ from app.events.bus import publish_event
 from .alerts import AlertEngine, Observation, default_rules
 from .anomaly import MetricAnomalyDetector
 from .metrics import MetricStore
-from .probes import NullProbe, Probe, SnmpProbe, SystemPingProbe
+from .probes import NullProbe, PingOrSnmpProbe, Probe, SystemPingProbe
 
 logger = logging.getLogger(__name__)
 
