@@ -41,6 +41,9 @@ traffic take? how loaded is each link?*
   confidence band auto-raise `traffic_anomaly` alerts (and auto-clear when traffic normalizes)
 - 🧭 **Root-cause analysis** — topology-aware RCA ranks suspects (failing fan-out switch >
   unhealthy upstream > noisy neighbors) with alert evidence for every down/degraded device
+- 🔮 **Capacity forecasting** — linear trend projection per link with confidence bands and a
+  statistical significance gate; `capacity_risk` alerts fire *before* saturation with an ETA,
+  and the UI overlays the dashed forecast on live traffic charts
 - 🕐 **Time travel** — topology snapshots auto-captured on real changes (discovery, health
   transitions) or manual capture; timeline UI, historical graph rendering, diff vs live
 - 📄 **PDF health report** — executive summary, device inventory, active alerts, top-talker links
@@ -79,6 +82,7 @@ for hooking up real devices / GNS3 / snmpsim.
 | `GET /api/v1/topology` | full twin graph (nodes + links) |
 | `GET /api/v1/devices/{id}` / `.../metrics` | device detail, metric time-series |
 | `GET /api/v1/links/{id}/metrics` | per-link in/out throughput series |
+| `GET /api/v1/links/{id}/forecast` | trend projection + capacity-risk verdict for the busier direction |
 | `POST /api/v1/analysis/whatif/{id}` | blast-radius simulation for a device |
 | `GET /api/v1/analysis/rca/{id}` | root-cause hypotheses for a down/degraded device |
 | `GET /api/v1/topology/path?from=A&to=B` | shortest path between two devices |
@@ -107,7 +111,7 @@ net-twin/
 │   │   ├── history/    # topology snapshots, time-travel diffing
 │   │   ├── monitor/    # probes, metrics, alerts, anomaly detection, scheduler
 │   │   └── reports/    # PDF report generator
-│   └── tests/          # 89 pytest tests
+│   └── tests/          # 109 pytest tests
 ├── frontend/           # React 18 + Vite + TypeScript console
 ├── docs/               # architecture, deployment, lab guide
 ├── lab/                # snmpsim fixtures for hardware-free labs
@@ -141,13 +145,15 @@ network (see [docs/lab-guide.md](docs/lab-guide.md)).
 6. **Time travel**: toolbar 🕐 → snapshot timeline; pick one to see the topology as it was, with a
    diff against the live network. `📸 Capture now` pins the current state.
 7. Click a red/down device → the detail panel suggests **root causes** ranked by topology.
-8. Top bar **⬇ Report PDF** → an operational report ready for management.
+8. Click a **core link** → the traffic chart includes a dashed **forecast** projection; a series
+   trending toward the 1 Gbps line would raise a `capacity_risk` alert with an ETA before it saturates.
+9. Top bar **⬇ Report PDF** → an operational report ready for management.
 
 ## Testing & quality
 
 ```bash
 cd backend
-.venv/Scripts/python -m pytest -q      # 89 tests
+.venv/Scripts/python -m pytest -q      # 109 tests
 .venv/Scripts/python -m ruff check app tests
 ```
 
