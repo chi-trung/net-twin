@@ -29,7 +29,7 @@ from app.events.bus import publish_event
 from .alerts import AlertEngine, Observation, default_rules
 from .anomaly import MetricAnomalyDetector
 from .metrics import MetricStore
-from .probes import NullProbe, Probe, SystemPingProbe
+from .probes import NullProbe, Probe, SnmpProbe, SystemPingProbe
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,18 @@ logger = logging.getLogger(__name__)
 class MonitorScheduler:
     def __init__(self, settings: Settings | None = None, probe: Probe | None = None) -> None:
         self.settings = settings or get_settings()
-        self.probe = probe or (
-            NullProbe() if self.settings.discovery_source == "simulator" else SystemPingProbe()
-        )
+        if probe is not None:
+            self.probe = probe
+        elif self.settings.discovery_source == "simulator":
+            self.probe = NullProbe()
+        else:
+            # live mode: SNMP probe works for ICMP-less devices, with a ping
+            # fallback for gear that answers ping but not SNMP
+            self.probe = PingOrSnmpProbe(
+                snmp_community=self.settings.snmp_community,
+                snmp_timeout=self.settings.snmp_timeout_seconds,
+                snmp_retries=self.settings.snmp_retries,
+            )
         self.metrics = MetricStore()
         self.alerts = AlertEngine(
             default_rules(

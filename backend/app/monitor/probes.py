@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import platform
 import re
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -99,3 +100,56 @@ class NullProbe:
         if get_outages().is_down(ip):
             return ProbeResult(reachable=False, latency_ms=None, packet_loss_pct=100.0)
         return ProbeResult(reachable=True, latency_ms=self.latency_ms, packet_loss_pct=0.0)
+
+
+class SnmpProbe:
+    """SNMP-based reachability for devices that drop ICMP.
+
+    One GET of sysName.0 per cycle doubles as the latency sample (the SNMP
+    round-trip is the network latency at this granularity). Meant for lab
+    agents and hardened gear that answer SNMP but not ping.
+    """
+
+    def __init__(self, community: str = "public", timeout: float = 2.0, retries: int = 1) -> None:
+        self.community = community
+        self.timeout = timeout
+        self.retries = retries
+
+    async def probe(self, ip: str, count: int = 4) -> ProbeResult:  # noqa: ARG002
+        from app.discovery.snmp import SnmpCollector
+
+        collector = SnmpCollector(
+            community=self.community, timeout=self.timeout, retries=self.retries
+        )
+        started = time.monotonic()
+        name = await collector.probe(ip)
+        latency_ms = (time.monotonic() - started) * 1000.0
+        if name is None:
+            return ProbeResult(reachable=False, latency_ms=None, packet_loss_pct=100.0)
+        return ProbeResult(reachable=True, latency_ms=round(latency_ms, 2), packet_loss_pct=0.0)
+
+
+class PingOrSnmpProbe:
+    """Live-mode probe: ping first (cheap), SNMP fallback (ICMP-less gear).
+
+    A device is down only when *both* fail — hardened-but-alive gear that
+    answers SNMP while dropping ping must not flap the twin.
+    """
+
+    def __init__(
+        self,
+        snmp_community: str = "public",
+        snmp_timeout: float = 2.0,
+        snmp_retries: int = 1,
+        ping: SystemPingProbe | None = None,
+    ) -> None:
+        self.ping = ping or SystemPingProbe()
+        self.snmp = SnmpProbe(
+            community=snmp_community, timeout=snmp_timeout, retries=snmp_retries
+        )
+
+    async def probe(self, ip: str, count: int = 4) -> ProbeResult:
+        result = await self.ping.probe(ip, count)
+        if result.reachable:
+            return result
+        return await self.snmp.probe(ip, count)
