@@ -70,6 +70,33 @@ async def _run_cmd(cmd, *args):
     return await result
 
 
+def _vb_value(raw: object) -> object:
+    """Normalize a pysnmp var-bind value across majors.
+
+    pysnmp 7 removed OctetString.getValue(); pyasn1 types are returned in
+    their natural form instead — Integer/Gauge32 are int subclasses, while
+    OctetString subclasses str and keeps raw octets as latin-1 text.
+    """
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, bytes):
+        return raw
+    return str(raw)
+
+
+def _split_index(oid_text: str, column_oid: str) -> str | None:
+    """Row index of a var-bind, sliced from the textual OID.
+
+    pysnmp 7 also removed ObjectIdentity.get_indices(); parsing the OID
+    string itself works on every major. Returns None when the bind is not
+    under the walked column (e.g. past the table's end).
+    """
+    prefix = f"{column_oid}."
+    if not oid_text.startswith(prefix):
+        return None
+    return oid_text[len(prefix):]
+
+
 def classify_device(sys_descr: str | None, if_types: list[int]) -> DeviceType:
     """Heuristic device classification from sysDescr text and interface types.
 
@@ -133,20 +160,23 @@ def build_interfaces(
 
 
 def _fmt_mac(raw: object) -> str | None:
-    """Render an SNMP physAddress (bytes or hex string) as aa:bb:cc:dd:ee:ff."""
+    """Render an SNMP physAddress (bytes, hex- or colon-text) as aa:bb:cc:dd:ee:ff."""
     if raw is None:
         return None
     if isinstance(raw, bytes):
         return ":".join(f"{b:02x}" for b in raw) or None
+    if isinstance(raw, int):
+        return None
     text = str(raw).strip()
     if not text:
         return None
-    # pysnmp may hand back "00:11:22:..." or "001122334455"
+    # pysnmp may hand back "00:11:22:...", "001122334455", or raw octets as
+    # latin-1 text (pysnmp 7 OctetString subclasses str)
     if ":" in text:
         return text.lower()
     if len(text) == 12 and all(c in "0123456789abcdefABCDEF" for c in text):
         return ":".join(text[i : i + 2] for i in range(0, 12, 2)).lower()
-    return text.lower()
+    return ":".join(f"{ord(c):02x}" for c in text).lower()
 
 
 def _walk_rows_to_neighbor_records(
@@ -184,6 +214,9 @@ def _octets_to_ip(raw: object) -> str | None:
     """Render a 4-byte SNMP octet string as a dotted-quad IPv4 address."""
     if isinstance(raw, bytes) and len(raw) == 4:
         return ".".join(str(b) for b in raw)
+    # pysnmp 7 OctetString subclasses str; raw octets arrive as latin-1 text
+    if isinstance(raw, str) and len(raw) == 4:
+        return ".".join(str(ord(c)) for c in raw)
     return None
 
 
@@ -313,11 +346,11 @@ class SnmpCollector:
             if err or errind:
                 return
             for vb in varbinds or []:
-                idx = vb[0].get_indices()
-                if not idx:
+                index = _split_index(str(vb[0]), oid)
+                if index is None:
                     continue
-                if_index = int(idx[-1])
-                rows.setdefault(if_index, {})[key] = vb[1].getValue()
+                if_index = int(index)
+                rows.setdefault(if_index, {})[key] = _vb_value(vb[1])
 
         await _collect_column(OID_IF_DESCR, "descr")
         await _collect_column(OID_IF_TYPE, "type")
@@ -345,10 +378,11 @@ class SnmpCollector:
             if err or errind:
                 continue
             for vb in varbinds or []:
-                idx = vb[0].get_indices()
-                if not idx:
+                index = _split_index(str(vb[0]), oid)
+                if index is None:
                     continue
-                rows.setdefault(tuple(int(i) for i in idx), {})[key] = vb[1].getValue()
+                row_key = tuple(int(p) for p in index.split("."))
+                rows.setdefault(row_key, {})[key] = _vb_value(vb[1])
         return rows
 
     async def collect_arp(self, ip: str) -> dict[str, str]:
