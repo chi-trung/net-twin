@@ -1,0 +1,106 @@
+# Live-discovery lab: three simulated SNMP devices on an isolated /24, plus
+# a net-twin backend configured for live discovery against them.
+#
+#   docker compose -f lab/docker-compose.lab.yml up --build
+#
+# Topology encoded in the recordings (LLDP + CDP):
+#   core-rtr-01 (172.30.0.10) --lldp-- dist-sw-01 (172.30.0.11)
+#   dist-sw-01 --cdp-- acc-sw-01 (172.30.0.12)
+#
+# Watch the twin build itself from pure SNMP: open http://localhost:8000/api/v1/topology
+# (or the UI at http://localhost:5173 with the main compose stack still running).
+
+name: net-twin-lab
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nettwin
+      POSTGRES_PASSWORD: nettwin
+      POSTGRES_DB: nettwin
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nettwin -d nettwin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  core-rtr:
+    build:
+      context: ..
+      dockerfile: lab/snmpsim/Dockerfile
+    environment:
+      DEVICE: core-rtr
+    networks:
+      labnet:
+        ipv4_address: 172.30.0.10
+
+  dist-sw:
+    build:
+      context: ..
+      dockerfile: lab/snmpsim/Dockerfile
+    environment:
+      DEVICE: dist-sw
+    networks:
+      labnet:
+        ipv4_address: 172.30.0.11
+
+  acc-sw:
+    build:
+      context: ..
+      dockerfile: lab/snmpsim/Dockerfile
+    environment:
+      DEVICE: acc-sw
+    networks:
+      labnet:
+        ipv4_address: 172.30.0.12
+
+  # The twin in live-discovery mode, scanning the lab subnet over SNMP.
+  # Uses the main backend image; db/redis come from the main compose file.
+  backend:
+    build: ../backend
+    command: >
+      sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://nettwin:nettwin@db:5432/nettwin
+      REDIS_URL: redis://redis:6379/0
+      DISCOVERY_SOURCE: live
+      DISCOVERY_SUBNET: 172.30.0.0/24
+      SNMP_COMMUNITY: public
+      SNMP_TIMEOUT_SECONDS: "1.0"
+      SNMP_RETRIES: "0"
+      DISCOVERY_INTERVAL_SECONDS: "60"
+      MONITOR_INTERVAL_SECONDS: "15"
+      LOG_LEVEL: INFO
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - labnet
+      - default
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  labnet:
+    name: net-twin-labnet
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
