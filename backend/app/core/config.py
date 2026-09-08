@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     anomaly_min_samples: int = 10
     anomaly_z_threshold: float = 3.5
 
+    # --- forecasting / capacity planning ---
+    forecast_enabled: bool = True
+    forecast_interval_seconds: int = 300
+    forecast_window_points: int = 30  # samples per series fed to the fit
+    forecast_horizon_minutes: int = 720  # how far ahead to project (12 h)
+    forecast_capacity_bps: float = 1_000_000_000.0  # 1 Gbps line-rate assumption
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -19,6 +19,7 @@ from app.db.base import utcnow
 from app.db.models import Alert, AlertSeverity, AlertStatus
 from app.events.bus import publish_event
 from app.monitor.anomaly import AnomalyVerdict, format_bps
+from app.monitor.forecast import ForecastVerdict, format_eta
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ class Observation:
     # carrying a series key, so plain observations can never clear them
     anomaly: AnomalyVerdict | None = None
     anomaly_series: tuple | None = None
+    # capacity-risk verdict for the series (app.monitor.forecast), carried on
+    # the same series-keyed observations
+    capacity_risk: ForecastVerdict | None = None
 
 
 @dataclass
@@ -104,6 +108,28 @@ def default_rules(
                 f"{o.anomaly.baseline_mean:.1f}ms (z={o.anomaly.z_score:.1f})"
             ),
             value=lambda o: o.anomaly.value if o.anomaly else None,
+            anomaly_scoped=True,
+        ),
+        # ── capacity planning (per traffic series) ──
+        # raised by the forecast engine's verdicts, not by samples: fires
+        # when the projected upper confidence band crosses the line rate
+        # inside the horizon, and auto-clears when the trend bends away
+        Rule(
+            name="capacity_risk",
+            severity=AlertSeverity.WARNING,
+            predicate=lambda o: o.capacity_risk is not None and o.capacity_risk.risk,
+            message=lambda o: (
+                f"{o.device_name} heading to saturation: trending "
+                f"{format_bps(o.capacity_risk.projected)} (+band "
+                f"{format_bps(o.capacity_risk.upper_band)}) toward "
+                f"{format_bps(o.capacity_risk.capacity)} line rate"
+                + (
+                    f" — ETA {format_eta(o.capacity_risk.eta_seconds)}"
+                    if o.capacity_risk.eta_seconds is not None
+                    else ""
+                )
+            ),
+            value=lambda o: o.capacity_risk.projected if o.capacity_risk else None,
             anomaly_scoped=True,
         ),
     ]

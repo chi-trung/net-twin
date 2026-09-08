@@ -28,8 +28,9 @@ from app.events.bus import publish_event
 
 from .alerts import AlertEngine, Observation, default_rules
 from .anomaly import MetricAnomalyDetector
+from .forecast_engine import ForecastEngine
 from .metrics import MetricStore
-from .probes import NullProbe, PingOrSnmpProbe, Probe, SystemPingProbe
+from .probes import NullProbe, PingOrSnmpProbe, Probe
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,11 @@ class MonitorScheduler:
             if self.settings.anomaly_detection_enabled
             else None
         )
+        self.forecasts = (
+            ForecastEngine(self.alerts, self.settings)
+            if self.settings.forecast_enabled
+            else None
+        )
         self._tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
 
@@ -75,6 +81,7 @@ class MonitorScheduler:
             asyncio.create_task(self._startup_adopt(), name="alert-adopt"),
             asyncio.create_task(self._monitor_loop(), name="monitor-loop"),
             asyncio.create_task(self._discovery_loop(), name="discovery-loop"),
+            asyncio.create_task(self._forecast_loop(), name="forecast-loop"),
         ]
         logger.info(
             "scheduler started (monitor=%ss, discovery=%ss, source=%s)",
@@ -121,6 +128,19 @@ class MonitorScheduler:
             except Exception:  # noqa: BLE001
                 logger.exception("discovery cycle failed")
             await self._sleep(self.settings.discovery_interval_seconds)
+
+    async def _forecast_loop(self) -> None:
+        # first pass deferred: the fit needs a real sample window to mean anything
+        await self._sleep(self.settings.forecast_interval_seconds)
+        while not self._stop.is_set():
+            try:
+                if self.forecasts is not None:
+                    async with SessionLocal() as db:
+                        await self.forecasts.run_once(db)
+                        await db.commit()
+            except Exception:  # noqa: BLE001
+                logger.exception("forecast cycle failed")
+            await self._sleep(self.settings.forecast_interval_seconds)
 
     # ── one cycle (also callable from tests / API) ─────────────────
 
