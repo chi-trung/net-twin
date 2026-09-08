@@ -7,6 +7,7 @@ unit-tested without a network.
 
 from __future__ import annotations
 
+import inspect
 import logging
 
 from app.db.models import DeviceType
@@ -14,6 +15,30 @@ from app.db.models import DeviceType
 from .models import DiscoveredDevice, DiscoveredInterface
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_walk(walk_cmd, *args):
+    """Normalize walk_cmd across pysnmp majors.
+
+    pysnmp 6.x: walk_cmd(...) is awaitable and returns the full result tuple.
+    pysnmp 7.x: it is an async generator yielding one result tuple per chunk.
+    Both callers just need the var-binds, so chunks are concatenated.
+    """
+    result = walk_cmd(*args)
+    if inspect.isasyncgen(result):
+        chunks = []
+        async for chunk in result:
+            chunks.append(chunk)
+        if not chunks:
+            return None, None, None, []
+        err, errind, _, varbinds = chunks[0]
+        merged = list(varbinds or [])
+        for err_c, errind_c, _, varbinds_c in chunks[1:]:
+            if err_c or errind_c:
+                break
+            merged.extend(varbinds_c or [])
+        return err, errind, None, merged
+    return await result
 
 # --- OIDs (RFC1213 + IF-MIB) ---
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
@@ -278,7 +303,8 @@ class SnmpCollector:
         rows: dict[int, dict[str, object]] = {}
 
         async def _collect_column(oid: str, key: str) -> None:
-            err, errind, _, varbinds = await h["walk_cmd"](
+            err, errind, _, varbinds = await _run_walk(
+                h["walk_cmd"],
                 engine, comm, target, h["ContextData"](), h["ObjectType"](h["ObjectIdentity"](oid))
             )
             if err or errind:
@@ -309,7 +335,8 @@ class SnmpCollector:
         rows: dict[tuple, dict[str, object]] = {}
 
         for oid, key in zip(oids, [f"c{i}" for i in range(len(oids))], strict=True):
-            err, errind, _, varbinds = await h["walk_cmd"](
+            err, errind, _, varbinds = await _run_walk(
+                h["walk_cmd"],
                 engine, comm, target, h["ContextData"](), h["ObjectType"](h["ObjectIdentity"](oid))
             )
             if err or errind:
