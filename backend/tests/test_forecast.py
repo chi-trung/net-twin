@@ -218,3 +218,19 @@ async def test_forecast_engine_runs_series_and_alerts(monkeypatch):
     assert risks == 1
     firing = [k for k in engine.alerts._firing]  # type: ignore[attr-defined]
     assert firing == [(1, "capacity_risk", ("traffic", 3, "if_in_bps"))]
+
+
+def test_forecast_noisy_nontrend_has_no_risk():
+    """A rising-looking but statistically flat series must not alarm."""
+    base = datetime.now(UTC)
+    # alternating +60/−40 → slope ≈ 10/step but huge residuals vs slope SE:
+    # the zig-zag "trend" is noise, the gate must veto the risk call
+    samples = _ramp(20, start=500.0, step=0.0, base=base)
+    samples = [
+        (t, v + (60.0 if i % 2 else -40.0)) for i, (t, v) in enumerate(samples)
+    ]
+    _, verdict = forecast_series(
+        samples, metric="traffic", capacity=1_000.0, horizon=timedelta(hours=1)
+    )
+    assert verdict is not None
+    assert verdict.risk is False
