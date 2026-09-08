@@ -1,5 +1,7 @@
 """API smoke tests for Phase 2."""
 
+import pytest
+
 from app.db.models import Alert, AlertSeverity, AlertStatus, Device, DeviceType, HealthState, Link
 
 
@@ -293,3 +295,64 @@ async def test_snapshot_diff_against_bad_value_400(client, db_session):
     await db_session.commit()
     resp = await client.get(f"/api/v1/snapshots/{snap.id}/diff?against=notanid")
     assert resp.status_code == 400
+
+# ── link forecast endpoint ─────────────────────────────────────────
+
+async def test_link_forecast_projection(client, db_session):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from app.db.models import Interface, MetricSample
+
+    core, dist, _acc, _host = await _seed_campus(db_session)
+    if_core = Interface(device_id=core.id, if_index=1, name="Gi0/0/0", oper_status="up")
+    if_dist = Interface(device_id=dist.id, if_index=1, name="Gi1/0/24", oper_status="up")
+    db_session.add_all([if_core, if_dist])
+    await db_session.commit()
+    link = (await db_session.scalars(
+        select(Link).where(Link.source_device_id == core.id, Link.target_device_id == dist.id)
+    )).one()
+    link.source_interface_id = if_core.id
+    link.target_interface_id = if_dist.id
+    await db_session.commit()
+
+    # out direction ramps hard (100 → 670 Mbps), in stays flat — the busier
+    # direction (out) is the one that must be forecast
+    base = datetime.now(UTC).replace(tzinfo=None)
+    for i in range(20):
+        ts = base + timedelta(minutes=5 * i)
+        db_session.add_all([
+            MetricSample(device_id=core.id, interface_id=if_core.id,
+                         metric_name="if_out_bps", value=100.0 + 30.0 * i, timestamp=ts),
+            MetricSample(device_id=dist.id, interface_id=if_dist.id,
+                         metric_name="if_in_bps", value=80.0, timestamp=ts),
+        ])
+    await db_session.commit()
+
+    resp = await client.get(f"/api/v1/links/{link.id}/forecast")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["link_id"] == link.id
+    assert body["direction"] == "out"
+    assert body["verdict"] is not None
+    v = body["verdict"]
+    assert v["metric"] == "traffic"
+    assert v["samples"] == 20
+    assert v["last_value"] == 670.0
+    assert v["slope_per_hour"] == pytest.approx(360.0, rel=0.001)
+    assert v["capacity"] > 0
+    assert body["points"], "projection points expected"
+    assert body["points"][-1]["timestamp"] > body["points"][0]["timestamp"]
+
+    # too few samples → no verdict
+    link2 = (await db_session.scalars(
+        select(Link).where(Link.source_device_id == dist.id)
+    )).first()
+    if link2 is not None:
+        resp = await client.get(f"/api/v1/links/{link2.id}/forecast")
+        assert resp.status_code == 200
+        assert resp.json()["verdict"] is None
+
+    resp = await client.get("/api/v1/links/999/forecast")
+    assert resp.status_code == 404

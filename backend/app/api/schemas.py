@@ -186,3 +186,29 @@ class SnapshotOut(ORMModel):
     taken_at: datetime
     trigger: str
     graph: dict
+
+# ── forecasting / capacity planning ────────────────────────────────
+
+class ForecastPointOut(BaseModel):
+    timestamp: datetime
+    value: float
+    lower: float
+    upper: float
+
+class ForecastVerdictOut(BaseModel):
+    metric: str
+    samples: int
+    last_value: float
+    slope_per_hour: float
+    projected: float
+    upper_band: float
+    capacity: float
+    risk: bool
+    eta_seconds: float | None = None
+    eta_text: str | None = None
+
+class LinkForecastOut(BaseModel):
+    link_id: int
+    direction: str  # "in" | "out"
+    verdict: ForecastVerdictOut | None = None
+    points: list[ForecastPointOut] = []

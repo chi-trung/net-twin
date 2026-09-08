@@ -1,6 +1,6 @@
 """REST API routes: health, topology, devices, metrics, alerts, analysis."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.analysis.graph import blast_radius, build_adjacency, shortest_path
+from app.core.config import get_settings
 from app.core.outages import get_outages
+from app.monitor.forecast import format_eta, forecast_series
 from app.db.models import (
     Alert,
     AlertStatus,
@@ -28,6 +30,7 @@ from .schemas import (
     AlertOut,
     DeviceDetail,
     DeviceOut,
+    LinkForecastOut,
     LinkOut,
     LinkTrafficOut,
     MetricPoint,
@@ -524,4 +527,90 @@ async def overview(db: AsyncSession = Depends(get_session)) -> OverviewOut:
         critical_alerts=sum(1 for a in alerts if a.severity.value == "critical"),
         avg_latency_ms=avg_latency,
         healthiest_updated_at=max((d.updated_at for d in devices), default=None),
+    )
+
+
+# ── forecasting ────────────────────────────────────────────────────
+
+
+@router.get("/links/{link_id}/forecast", response_model=LinkForecastOut, tags=["analysis"])
+async def get_link_forecast(
+    link_id: int,
+    db: AsyncSession = Depends(get_session),
+    horizon_minutes: int = Query(default=720, ge=15, le=10_080),
+    limit: int = Query(default=60, ge=8, le=500),
+) -> LinkForecastOut:
+    """Linear projection of a link's busier direction over the horizon.
+
+    The heavier of the two directions (by latest sample) is forecast, so the
+    chart shows one meaningful trend rather than two overlapping guesses.
+    """
+    lnk = await db.get(Link, link_id)
+    if lnk is None:
+        raise HTTPException(status_code=404, detail=f"link {link_id} not found")
+    iface_ids = _link_interface_ids(lnk)
+    if not iface_ids:
+        return LinkForecastOut(link_id=link_id, direction="in", verdict=None, points=[])
+
+    rows = (
+        await db.execute(
+            select(MetricSample.interface_id, MetricSample.metric_name, MetricSample.timestamp,
+                   MetricSample.value)
+            .where(
+                MetricSample.interface_id.in_(iface_ids),
+                MetricSample.metric_name.in_(["if_in_bps", "if_out_bps"]),
+            )
+            .order_by(MetricSample.timestamp.desc())
+            .limit(10_000)
+        )
+    ).all()
+
+    series: dict[tuple[int, str], list[tuple[datetime, float]]] = {}
+    for iface_id, metric, ts, value in reversed(rows):
+        series.setdefault((iface_id, metric), []).append((ts, float(value)))
+
+    # pick the busier direction by its most recent sample
+    def _latest(key: tuple[int, str]) -> float:
+        pts = series.get(key) or []
+        return pts[-1][1] if pts else -1.0
+
+    best: tuple[int, str] | None = None
+    for iface_id in iface_ids:
+        for metric in ("if_in_bps", "if_out_bps"):
+            key = (iface_id, metric)
+            if best is None or _latest(key) > _latest(best):
+                best = key
+    if best is None or len(series.get(best, [])) < 8:
+        return LinkForecastOut(link_id=link_id, direction="in", verdict=None, points=[])
+
+    points, verdict = forecast_series(
+        series[best],
+        metric="traffic",
+        capacity=get_settings().forecast_capacity_bps,
+        horizon=timedelta(minutes=horizon_minutes),
+        max_points=64,
+    )
+    from .schemas import ForecastPointOut, ForecastVerdictOut
+
+    direction = "in" if best[1] == "if_in_bps" else "out"
+    vout = None
+    if verdict is not None:
+        vout = ForecastVerdictOut(
+            metric=verdict.metric,
+            samples=verdict.samples,
+            last_value=verdict.last_value,
+            slope_per_hour=verdict.slope_per_hour,
+            projected=verdict.projected,
+            upper_band=verdict.upper_band,
+            capacity=verdict.capacity,
+            risk=verdict.risk,
+            eta_seconds=verdict.eta_seconds,
+            eta_text=format_eta(verdict.eta_seconds) if verdict.eta_seconds is not None else None,
+        )
+    return LinkForecastOut(
+        link_id=link_id,
+        direction=direction,
+        verdict=vout,
+        points=[ForecastPointOut(timestamp=p.timestamp, value=p.value, lower=p.lower,
+                                  upper=p.upper) for p in points],
     )
