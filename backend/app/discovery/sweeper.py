@@ -7,6 +7,11 @@ Strategy (best-effort, in order):
    parsing (`arp -a`), which works unprivileged on Windows/Linux.
 
 Both paths return the same shape: list of (ip, mac|None).
+
+`sweep_subnet` composes these; `snmp_sweep_subnet` is a third, complementary
+sweep: an SNMP GET against every address, which finds devices that answer
+SNMP but no ICMP/TCP (UDP-only agents, firewalled gear). The engine merges
+all sweeps' findings.
 """
 
 from __future__ import annotations
@@ -102,4 +107,33 @@ async def sweep_subnet(cidr: str, prefer_scapy: bool = True) -> list[tuple[str, 
 
     found = await _fallback_sweep(cidr)
     logger.info("fallback sweep found %d live hosts in %s", len(found), cidr)
+    return found
+
+
+async def snmp_sweep_subnet(
+    cidr: str,
+    community: str = "public",
+    timeout: float = 1.0,
+    concurrency: int = 64,
+) -> list[str]:
+    """Find hosts in `cidr` that answer a SNMPv2c GET of sysName.0.
+
+    Complements the ICMP/TCP sweep: SNMP-speaking devices that drop ICMP
+    (UDP-only agents, hardened gear) are invisible to both scapy and the
+    TCP fallback, but an NMS always talks to them — over SNMP. Concurrency
+    is bounded so a /24 doesn't fire 254 simultaneous sockets.
+    """
+    from .snmp import SnmpCollector
+
+    collector = SnmpCollector(community=community, timeout=timeout, retries=0)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _probe(ip: str) -> str | None:
+        async with semaphore:
+            name = await collector.probe(ip)
+        return ip if name is not None else None
+
+    results = await asyncio.gather(*(_probe(ip) for ip in iter_hosts(cidr)))
+    found = [ip for ip in results if ip is not None]
+    logger.info("SNMP sweep found %d live hosts in %s", len(found), cidr)
     return found

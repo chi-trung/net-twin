@@ -174,6 +174,35 @@ class SnmpCollector:
         self.timeout = timeout
         self.retries = retries
 
+    async def probe(self, ip: str) -> str | None:
+        """Lightweight reachability check: GET sysName.0, return it or None.
+
+        Used by the SNMP sweep — a single GET, no table walks.
+        """
+        try:
+            h = await self._hlapi()
+            engine = h["SnmpEngine"]()
+            target = await h["UdpTransportTarget"].create(
+                (ip, 161), timeout=self.timeout, retries=self.retries
+            )
+            comm = h["CommunityData"](self.community, mpModel=1)
+            err, errind, _, varbinds = await h["get_cmd"](
+                engine,
+                comm,
+                target,
+                h["ContextData"](),
+                h["ObjectType"](h["ObjectIdentity"](OID_SYS_NAME)),
+            )
+            if err or errind or not varbinds:
+                return None
+            value = varbinds[0][1]
+            return str(value) if value is not None else None
+        except ImportError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — unreachable is normal in a sweep
+            logger.debug("SNMP probe failed for %s: %s", ip, exc)
+            return None
+
     async def collect(self, ip: str) -> DiscoveredDevice | None:
         try:
             raw = await self._snmp_walk_all(ip)
