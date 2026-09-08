@@ -17,29 +17,6 @@ from .models import DiscoveredDevice, DiscoveredInterface
 logger = logging.getLogger(__name__)
 
 
-async def _run_walk(walk_cmd, *args):
-    """Normalize walk_cmd across pysnmp majors.
-
-    pysnmp 6.x: walk_cmd(...) is awaitable and returns the full result tuple.
-    pysnmp 7.x: it is an async generator yielding one result tuple per chunk.
-    Both callers just need the var-binds, so chunks are concatenated.
-    """
-    result = walk_cmd(*args)
-    if inspect.isasyncgen(result):
-        chunks = []
-        async for chunk in result:
-            chunks.append(chunk)
-        if not chunks:
-            return None, None, None, []
-        err, errind, _, varbinds = chunks[0]
-        merged = list(varbinds or [])
-        for err_c, errind_c, _, varbinds_c in chunks[1:]:
-            if err_c or errind_c:
-                break
-            merged.extend(varbinds_c or [])
-        return err, errind, None, merged
-    return await result
-
 # --- OIDs (RFC1213 + IF-MIB) ---
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
@@ -67,6 +44,30 @@ OID_CDP_CACHE_ADDR = "1.3.6.1.4.1.9.9.23.1.2.1.1.4"  # cdpCacheAddress (ip)
 IFTYPE_ETHERNET = 6
 IFTYPE_L2_VLAN = 23  # propVirtual-ish; commonly seen on switches
 IFTYPE_LOOPBACK = 24
+
+
+async def _run_cmd(cmd, *args):
+    """Normalize pysnmp command results across majors.
+
+    pysnmp 6.x: get_cmd/walk_cmd(...) are awaitables returning one result
+    tuple. pysnmp 7.x: both are async generators yielding one tuple per
+    chunk/retry — chunks are drained and their var-binds concatenated.
+    """
+    result = cmd(*args)
+    if inspect.isasyncgen(result):
+        chunks = []
+        async for chunk in result:
+            chunks.append(chunk)
+        if not chunks:
+            return None, None, None, []
+        err, errind, _, varbinds = chunks[0]
+        merged = list(varbinds or [])
+        for err_c, errind_c, _, varbinds_c in chunks[1:]:
+            if err_c or errind_c:
+                break
+            merged.extend(varbinds_c or [])
+        return err, errind, None, merged
+    return await result
 
 
 def classify_device(sys_descr: str | None, if_types: list[int]) -> DeviceType:
@@ -211,7 +212,8 @@ class SnmpCollector:
                 (ip, 161), timeout=self.timeout, retries=self.retries
             )
             comm = h["CommunityData"](self.community, mpModel=1)
-            err, errind, _, varbinds = await h["get_cmd"](
+            err, errind, _, varbinds = await _run_cmd(
+                h["get_cmd"],
                 engine,
                 comm,
                 target,
@@ -289,7 +291,8 @@ class SnmpCollector:
         comm = h["CommunityData"](self.community, mpModel=1)  # v2c
 
         async def _get(oid: str) -> str | None:
-            err, errind, _, varbinds = await h["get_cmd"](
+            err, errind, _, varbinds = await _run_cmd(
+                h["get_cmd"],
                 engine, comm, target, h["ContextData"](), h["ObjectType"](h["ObjectIdentity"](oid))
             )
             if err or errind or not varbinds:
@@ -303,7 +306,7 @@ class SnmpCollector:
         rows: dict[int, dict[str, object]] = {}
 
         async def _collect_column(oid: str, key: str) -> None:
-            err, errind, _, varbinds = await _run_walk(
+            err, errind, _, varbinds = await _run_cmd(
                 h["walk_cmd"],
                 engine, comm, target, h["ContextData"](), h["ObjectType"](h["ObjectIdentity"](oid))
             )
@@ -335,7 +338,7 @@ class SnmpCollector:
         rows: dict[tuple, dict[str, object]] = {}
 
         for oid, key in zip(oids, [f"c{i}" for i in range(len(oids))], strict=True):
-            err, errind, _, varbinds = await _run_walk(
+            err, errind, _, varbinds = await _run_cmd(
                 h["walk_cmd"],
                 engine, comm, target, h["ContextData"](), h["ObjectType"](h["ObjectIdentity"](oid))
             )
