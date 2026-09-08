@@ -130,7 +130,10 @@ async def snmp_sweep_subnet(
 
     async def _probe(ip: str) -> str | None:
         async with semaphore:
-            name = await collector.probe(ip)
+            try:
+                name = await collector.probe(ip)
+            except Exception:  # noqa: BLE001 — one bad socket must not kill the sweep
+                return None
         return ip if name is not None else None
 
     results = await asyncio.gather(*(_probe(ip) for ip in iter_hosts(cidr)))
